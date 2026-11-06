@@ -1,4 +1,4 @@
-/* Quote Desk – web app (PWA). Talks to the Apps Script API, or to the in-memory demo. */
+/* Quote Desk – web app (PWA). Talks to the Quote Desk API (Apps Script). */
 (function () {
 'use strict';
 const CFG = window.QD_CONFIG || {};
@@ -18,14 +18,14 @@ const XI = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
 
 const S = {
-  demo: !CFG.API_URL || store.get('qd_demo') === '1', token: store.get('qd_token'), user: null,
+  demo: false, token: store.get('qd_token'), user: null,
   deals: [], inbox: [], view: 'today', sel: null, open: {}, busy: {}, msgs: [],
   chat: window.innerWidth < 860 ? 'min' : 'dock', dockW: 360, pop: { x: 0, y: 70, w: 380, h: 540 }, undo: null, installEvt: null
 };
 
 /* ---------- API ---------- */
 async function api(action, data) {
-  if (S.demo) return window.QDMock.call(action, data);
+  if (!CFG.API_URL) throw new Error('API URL is missing in config.js.');
   const res = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, data || {})) });
   let out;
   try { out = await res.json(); } catch (e) { throw new Error('Server did not answer. Check your connection.'); }
@@ -281,8 +281,7 @@ function renderAuth(err) {
   if (authMode === 'forgot') h = '<h1 style="margin-top:16px">Reset password</h1><form data-auth="forgot">' + f('email', 'Email', 'email', 'value="' + esc(authEmail) + '"') + '<div class="err" id="aerr">' + esc(err || '') + '</div><button class="btn primary">Send reset code</button></form><div class="authlinks"><button class="link" data-amode="login">Back to sign in</button></div>';
   if (authMode === 'reset') h = '<h1 style="margin-top:16px">New password</h1><p class="muted">Enter the code sent to ' + esc(authEmail) + '.</p><form data-auth="reset">' + f('code', 'Code', 'text', 'inputmode="numeric" maxlength="6"') + f('password', 'New password (8+ characters)', 'password', 'minlength="8" autocomplete="new-password"') + '<div class="err" id="aerr">' + esc(err || '') + '</div><button class="btn primary">Save and sign in</button></form>';
   if (authMode === 'pending') h = '<h1 style="margin-top:16px">Almost there</h1><p>Your email is confirmed. An admin needs to approve your account – you can sign in after that.</p><div class="authlinks"><button class="link" data-amode="login">Back to sign in</button></div>';
-  if (!CFG.API_URL) h += '<p class="muted" style="margin-top:18px;font-size:13px">No API URL set in config.js – <button class="link" data-act="demo">open the demo</button>.</p>';
-  else h += '<p class="muted" style="margin-top:18px;font-size:13px"><button class="link" data-act="demo">Try the demo with sample data</button></p>';
+  if (!CFG.API_URL) h += '<p class="err" style="margin-top:18px">API URL is missing – set API_URL in config.js.</p>';
   $('#authBody').innerHTML = h;
   const first = $('#authBody input'); if (first) first.focus();
 }
@@ -295,9 +294,9 @@ async function onAuth(form) {
     else if (form.dataset.auth === 'forgot') { authEmail = v.email; await api('auth.requestReset', v); authMode = 'reset'; renderAuth(); }
     else if (form.dataset.auth === 'reset') done(await api('auth.reset', { email: authEmail, code: v.code, password: v.password }));
   } catch (e) { renderAuth(e.message); }
-  function done(r) { S.token = r.token; S.user = r.user; if (!S.demo) store.set('qd_token', r.token); startApp(); }
+  function done(r) { S.token = r.token; S.user = r.user; store.set('qd_token', r.token); startApp(); }
 }
-function signOut(silent) { if (!S.demo && S.token && !silent) api('auth.logout').catch(() => {}); S.token = null; S.user = null; store.set('qd_token', null); store.set('qd_demo', null); S.demo = !CFG.API_URL; $('#app').hidden = true; $('#auth').hidden = false; authMode = 'login'; renderAuth(); }
+function signOut(silent) { if (!S.demo && S.token && !silent) api('auth.logout').catch(() => {}); S.token = null; S.user = null; store.set('qd_token', null); $('#app').hidden = true; $('#auth').hidden = false; authMode = 'login'; renderAuth(); }
 
 /* ---------- chat ---------- */
 async function sendChat(text) {
@@ -390,7 +389,6 @@ document.addEventListener('click', async (e) => {
   const a = b.dataset.act;
   if (a === 'mclose') closeModal();
   else if (a === 'copy') { try { await navigator.clipboard.writeText($('#etext').textContent); toast('Copied'); } catch (err) { toast('Copy blocked – select the text'); } }
-  else if (a === 'demo') { S.demo = true; store.set('qd_demo', '1'); done(); }
   else if (a === 'signout') signOut();
   else if (a === 'refresh') { await loadAll(); toast('Updated'); }
   else if (a === 'newDeal') newDealForm();
@@ -402,7 +400,6 @@ document.addEventListener('click', async (e) => {
   else if (a === 'addLine' && x) { x.lines = x.lines || []; x.lines.push({ inc: true, cat: 'Hardware', desc: '', pn: '', qty: 1, cost: 0, wht: false }); if (cs1(x)) { S.open[x.id + 'force'] = true; S.open[x.id + 1] = true; } render(); saveSoon(x); }
   else if (a === 'extract' && x) { S.busy.extract = true; render(); try { const d = await api('claude.extract', { dealId: x.id }); Object.assign(x, d); toast('Claude found ' + (d.lines || []).length + ' cost lines – check them'); } catch (err) { toast(err.message); } S.busy.extract = false; render(); }
   else if (a === 'generate' && x) { clearTimeout(saveTimers[x.id]); delete saveTimers[x.id]; S.busy.gen = true; render(); try { await api('deals.save', { deal: x }).then((s) => Object.assign(x, s)); const d = await api('quote.generate', { dealId: x.id }); Object.assign(x, d); toast(S.demo ? 'Demo: drafts would be saved to Drive now' : 'Drafts saved to Drive – next: send for approval'); } catch (err) { toast(err.message); } S.busy.gen = false; render(); }
-  function done() { S.token = 'demo'; S.user = null; startApp(); }
 });
 function cs1(x) { return curStep(x) < 1; }
 document.addEventListener('change', (e) => {
@@ -438,7 +435,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 document.body.insertAdjacentHTML('beforeend', '<datalist id="sales">' + (CFG.SALES || []).map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist><datalist id="approvers">' + (CFG.APPROVERS || []).map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>');
 
 // boot
-if (S.demo && !CFG.API_URL) { S.token = 'demo'; startApp(); }
-else if (S.token) startApp();
+store.set('qd_demo', null);
+if (S.token && S.token !== 'demo' && CFG.API_URL) startApp();
 else { $('#auth').hidden = false; renderAuth(); }
 })();
