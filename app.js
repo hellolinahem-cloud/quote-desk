@@ -54,16 +54,25 @@ window.QDCalc = calc;
 
 /* ---------- deal logic ---------- */
 const byId = (id) => S.deals.find((x) => x.id === id);
-const cost = (x) => { const c = x.costing || []; const w = c.filter((k) => k.status === 'waiting'); return { waiting: w, all: !w.length && c.length > 0, got: c.length - w.length, total: c.length, est: c.filter((k) => k.status === 'estimate') }; };
+const cost = (x) => { const c = x.costing || []; const w = c.filter((k) => k.status === 'waiting'), t = c.filter((k) => k.status === 'todo');
+  return { waiting: w, todo: t, open: w.concat(t), all: !w.length && !t.length && c.length > 0, got: c.filter((k) => k.status === 'received' || k.status === 'estimate').length, total: c.length, est: c.filter((k) => k.status === 'estimate'),
+    overdue: w.filter((k) => k.followUp && k.followUp <= TODAY), nextFollow: w.map((k) => k.followUp).filter(Boolean).sort()[0] }; };
 function curStep(x) { const d = x.d || {}; if (!d.priceRcv) return 0; if (!d.drafted) return 1; if (!d.approved) return 2; if (!d.released) return 3; return 4; }
+const itemName = (k) => k.n + (k.sup ? ' → ' + k.sup : '');
 function next(x) {
-  const s = curStep(x), c = cost(x), d = x.d || {}; const wt = c.waiting.map((w) => w.n).join(', ');
+  const s = curStep(x), c = cost(x), d = x.d || {}, items = x.costing || [], sc = x.scan || {};
   if (x.outcome) return { text: x.outcome === 'won' ? 'Won' : 'Lost', grp: 'closed' };
   if (s === 0) {
-    if (!d.priceReq) return { text: 'Request price from ' + (x.supplier || 'supplier'), act: 'priceReq', label: 'Request price', grp: 'ready' };
+    if (!items.length) {
+      if (sc.status === 'queued' || sc.status === 'reading') return { text: 'Claude is reading Gmail for this deal…', grp: 'wait' };
+      return { text: 'Add the BoM items to cost', act: 'open', label: 'Open', grp: 'ready' };
+    }
+    if (c.overdue.length) { const k = c.overdue[0], o = days(k.followUp, TODAY); const i = items.indexOf(k);
+      return { text: 'Follow up ' + (k.sup || 'supplier') + ' – ' + k.n + (o > 0 ? ' · ' + o + 'd overdue' : ' · due today'), tone: 'red', act: 'followItem', i, label: 'Follow up', grp: 'now' }; }
+    if (c.todo.length) { const k = c.todo[0]; const i = items.indexOf(k);
+      return { text: 'Request price: ' + itemName(k), sub: c.todo.length > 1 ? '+' + (c.todo.length - 1) + ' more not requested' : '', act: 'reqItem', i, label: 'Draft request', grp: 'ready' }; }
     if (c.all) return { text: 'Costs complete', act: 'qb', label: 'Build quote', grp: 'ready' };
-    if (x.followUp && x.followUp <= TODAY) { const o = days(x.followUp, TODAY); return { text: 'Follow up: ' + wt + (o > 0 ? ' · ' + o + 'd overdue' : ' · due today'), tone: 'red', act: 'follow', label: 'Follow up', grp: 'now' }; }
-    return { text: 'Waiting: ' + (wt || 'costing'), sub: x.followUp ? 'Follow-up ' + fmt(x.followUp) : '', act: 'follow', label: 'Follow up', grp: 'wait' };
+    return { text: 'Waiting: ' + c.waiting.map((k) => (k.sup || '?') + ' (' + k.n + ')').join(', '), sub: c.nextFollow ? 'Follow-up ' + fmt(c.nextFollow) : '', grp: 'wait' };
   }
   if (s === 1) return { text: 'Build GP & quotation', act: 'qb', label: 'Build quote', grp: 'ready' };
   if (s === 2) { if (!d.approvalReq) return { text: 'Send for approval – ' + (x.approver || 'approver'), act: 'approvalReq', label: 'Send for approval', grp: 'ready' };
@@ -73,6 +82,7 @@ function next(x) {
   return { text: due ? 'Follow up customer with ' + (x.sales || 'Sales') : 'With customer', sub: due || !x.custFollow ? '' : 'Follow-up ' + fmt(x.custFollow), tone: due ? 'red' : '', act: 'custFollow', label: 'Log follow-up', grp: due ? 'now' : 'wait' };
 }
 function urgent(x) { const n = next(x); if (n.grp === 'now') return true; if (x.deadline && curStep(x) < 3 && !x.outcome && days(TODAY, x.deadline) <= 2) return true; return false; }
+function prio(x) { if (x.outcome) return 9; if (urgent(x)) return 0; return next(x).grp === 'ready' ? 1 : 2; }
 function dl(x) { if (!x.deadline || curStep(x) >= 4 || x.outcome) return ''; const n = days(TODAY, x.deadline);
   const t = n < 0 ? (-n) + 'd late' : n === 0 ? 'Due today' : n === 1 ? 'Due tomorrow' : 'Due ' + fmt(x.deadline);
   return '<span class="chip ' + (n <= 2 ? 'red' : n <= 5 ? 'amber' : '') + '">' + t + '</span>'; }
@@ -102,11 +112,13 @@ function mutate(x, fn, msg) {
 function saveSoon(x) { clearTimeout(saveTimers[x.id]); saveTimers[x.id] = setTimeout(() => { delete saveTimers[x.id]; saveDeal(x, null, { quiet: true }); }, 700); }
 
 /* ---------- actions ---------- */
-function act(a, x) {
-  const w = cost(x).waiting.map((k) => k.n).join(', ');
+function act(a, x, i) {
+  const items = x.costing || []; const k = i != null ? items[+i] : null;
+  if (a === 'open') { openDeal(x.id); return; }
   if (a === 'qb') { if (!x.d.priceRcv && cost(x).all) { x.d.priceRcv = TODAY; saveSoon(x); } openDeal(x.id); return; }
-  if (a === 'priceReq') { mutate(x, () => { x.d.priceReq = TODAY; x.followUp = addDays(TODAY, 2); log(x, 'Price requested from ' + x.supplier); }, 'Price requested – follow-up ' + fmt(addDays(TODAY, 2))); email('rfq', x); }
-  else if (a === 'follow') { mutate(x, () => { x.followUp = addDays(TODAY, 2); log(x, 'Followed up: ' + (w || 'pricing')); }, 'Follow-up logged – next ' + fmt(addDays(TODAY, 2))); email('follow', x); }
+  if (a === 'reqItem' && k) { email('rfq', x, k); mutate(x, () => { k.status = 'waiting'; k.req = TODAY; k.followUp = addDays(TODAY, 2); if (!x.d.priceReq) x.d.priceReq = TODAY; log(x, 'Price requested: ' + itemName(k)); }, 'Marked as requested – follow-up ' + fmt(addDays(TODAY, 2))); }
+  else if (a === 'followItem' && k) { const same = items.filter((o) => o.status === 'waiting' && (o.sup || '') === (k.sup || '')); email('follow', x, k, same);
+    mutate(x, () => { same.forEach((o) => { o.followUp = addDays(TODAY, 2); }); log(x, 'Followed up ' + (k.sup || 'supplier') + ': ' + same.map((o) => o.n).join(', ')); }, 'Follow-up logged – next ' + fmt(addDays(TODAY, 2))); }
   else if (a === 'approvalReq') { mutate(x, () => { x.d.approvalReq = TODAY; log(x, 'Sent for approval – ' + x.approver); }, 'Sent for approval'); email('approval', x); }
   else if (a === 'approved') mutate(x, () => { x.d.approved = TODAY; log(x, 'Approved'); }, 'Approved – next: release to ' + (x.sales || 'Sales'));
   else if (a === 'released') { mutate(x, () => { x.d.released = TODAY; x.custFollow = addDays(TODAY, 3); log(x, 'Released to ' + (x.sales || 'Sales')); }, 'Released – customer follow-up ' + fmt(addDays(TODAY, 3))); email('release', x); }
@@ -116,33 +128,44 @@ function act(a, x) {
 function openDeal(id) { S.view = 'deal'; S.sel = id; render(); $('#main').scrollTop = 0; }
 
 /* ---------- email drafts ---------- */
-function email(k, x) {
-  const w = cost(x).waiting.map((c) => c.n).join(', '); const me = S.user ? S.user.name : 'Lina'; let to, cc, sub, body;
+function email(kind, x, k, group) {
+  const me = S.user ? S.user.name : 'Lina'; let to, cc, sub, body;
   const sig = '\n\nThank you,\n' + me + '\nBusiness Development – Biplan Global';
-  if (k === 'rfq') { to = '[' + x.supplier + ' contact]'; cc = x.sales || '[Sales owner]'; sub = 'RFQ – ' + x.customer + ' – ' + x.project; body = 'Dear team,\n\nPlease kindly quote your best price for the attached BOQ for ' + x.customer + ' (' + x.project + ').\nPlease include unit price, validity, Incoterm, lead time, warranty and deal registration status.' + sig; }
-  else if (k === 'follow') { to = '[' + x.supplier + ' contact]'; cc = x.sales || '[Sales owner]'; sub = 'Follow-up: ' + x.customer + ' – ' + x.project + ' pricing';
-    body = 'Dear team,\n\nFollowing up on our price request for ' + x.customer + ' (' + x.project + ')' + (x.d.priceReq ? ' sent on ' + fmt(x.d.priceReq) : '') + '.\nStill pending: ' + (w || 'pricing') + '.\n' +
+  if (kind === 'rfq') { to = (k && k.contact) || '[' + ((k && k.sup) || x.supplier || 'supplier') + ' contact]'; cc = x.sales || '[Sales owner]'; sub = 'RFQ – ' + x.customer + ' – ' + (k ? k.n : x.project);
+    body = 'Dear ' + ((k && k.sup) || '') + ' team,\n\nPlease kindly quote your best price for ' + (k ? k.n : 'the attached BOQ') + ' for our customer ' + x.customer + ' (' + x.project + ').' + (x.requirement ? '\n\nRequirement: ' + x.requirement : '') +
+      '\n\nPlease include unit price, validity, Incoterm, lead time, warranty and deal registration status.' + (x.deadline ? '\nOur customer deadline is ' + fmt(x.deadline) + ' – could you please reply by ' + fmt(addDays(TODAY, 2)) + '?' : '') + sig; }
+  else if (kind === 'follow') { const list = (group && group.length ? group : [k]).filter(Boolean); to = (k && k.contact) || '[' + ((k && k.sup) || 'supplier') + ' contact]'; cc = x.sales || '[Sales owner]'; sub = 'Follow-up: ' + x.customer + ' – ' + x.project + ' pricing';
+    body = 'Dear ' + ((k && k.sup) || '') + ' team,\n\nFollowing up on our price request for ' + x.customer + ' (' + x.project + ')' + (k && k.req ? ' sent on ' + fmt(k.req) : '') + '.\nStill pending: ' + list.map((o) => o.n).join(', ') + '.\n' +
       (x.deadline ? 'Our customer deadline is ' + fmt(x.deadline) + ' – could you please share it by ' + fmt(addDays(TODAY, 1)) + '?' : 'Could you please share an update by ' + fmt(addDays(TODAY, 1)) + '?') + sig; }
-  else if (k === 'approval') { const g = x.generated; to = x.approver; cc = x.sales || '[Sales owner]'; sub = 'Verify Quotation – ' + x.customer + ' – ' + x.project;
+  else if (kind === 'approval') { const g = x.generated; to = x.approver; cc = x.sales || '[Sales owner]'; sub = 'Verify Quotation – ' + x.customer + ' – ' + x.project;
     body = 'Dear Bong,\n\nPlease help verify the quotation for ' + x.customer + ' – ' + x.project + '.\n' + (g ? '\nSales excl. VAT: ' + money(g.sales) + '\nGP: ' + money(g.gp) + ' (' + Number(g.gpp).toFixed(1) + '%)\nTotal incl. VAT: ' + money(g.total) + '\n' : '') +
-      (g && g.folderUrl && g.folderUrl !== '#' ? '\nFolder: ' + g.folderUrl + '\n' : '\nSPR and quotation are in the deal folder.\n') + sig; }
-  else { to = x.sales || '[Sales owner]'; cc = ''; sub = 'Quotation ready – ' + x.customer + ' – ' + x.project; body = 'Hi ' + (x.sales ? x.sales.split(' ')[0] : '') + ',\n\nThe approved quotation for ' + x.customer + ' – ' + x.project + ' is ready' + (x.generated && x.generated.quoteUrl && x.generated.quoteUrl !== '#' ? ': ' + x.generated.quoteUrl : ' in the deal folder') + '.\nPlease send it to the customer and share their feedback.' + sig; }
+      (g && g.folderUrl ? '\nFolder: ' + g.folderUrl + '\n' : '\nSPR and quotation are in the deal folder.\n') + sig; }
+  else { to = x.sales || '[Sales owner]'; cc = ''; sub = 'Quotation ready – ' + x.customer + ' – ' + x.project; body = 'Hi ' + (x.sales ? x.sales.split(' ')[0] : '') + ',\n\nThe approved quotation for ' + x.customer + ' – ' + x.project + ' is ready' + (x.generated && x.generated.quoteUrl ? ': ' + x.generated.quoteUrl : ' in the deal folder') + '.\nPlease send it to the customer and share their feedback.' + sig; }
   modal('<div class="row" style="justify-content:space-between"><h2>Email draft – not sent</h2><button class="ibtn" data-act="mclose" aria-label="Close">' + XI + '</button></div><pre id="etext">' + esc('To: ' + to + '\nCc: ' + cc + '\nSubject: ' + sub + '\n\n' + body) + '</pre><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-act="mclose">Close</button><button class="btn primary" data-act="copy">Copy</button></div>');
 }
 
 /* ---------- views: today ---------- */
-function dcard(x) { const n = next(x);
-  return '<div class="card dcard" data-open="' + x.id + '"><div class="who"><button class="title" data-open="' + x.id + '">' + esc(x.customer) + ' <span class="muted" style="font-weight:400">· ' + esc(x.project) + '</span></button>' +
-    '<div class="next"><span class="' + (n.tone === 'red' ? 't-red' : n.tone === 'amber' ? 't-amber' : '') + '">' + esc(n.text) + '</span>' + (n.sub ? ' <span class="muted">· ' + esc(n.sub) + '</span>' : '') + '</div></div>' +
-    dl(x) + (n.act ? '<button class="btn sm ' + (urgent(x) ? 'primary' : n.grp === 'ready' ? 'ok' : '') + '" data-do="' + n.act + '" data-id="' + x.id + '">' + n.label + '</button>' : '') + '</div>'; }
-function section(title, color, list, empty) {
-  return '<div class="sec"><div class="sechead"><span class="n" style="background:' + color + '">' + list.length + '</span><h2>' + title + '</h2></div><div class="cards">' + (list.map(dcard).join('') || '<p class="muted">' + empty + '</p>') + '</div></div>'; }
+const PRIO = [['Do now', 'red'], ['Ready', 'green'], ['Waiting', 'blue']];
+function itemChip(k) {
+  if (k.status === 'received') return '<span class="chip green">Received' + (k.d ? ' ' + fmt(k.d) : '') + '</span>';
+  if (k.status === 'estimate') return '<span class="chip amber">Estimate</span>';
+  if (k.status === 'todo') return '<span class="chip amber">Not requested</span>';
+  if (k.followUp && k.followUp <= TODAY) return '<span class="chip red">Follow-up due' + (days(k.followUp, TODAY) > 0 ? ' · ' + days(k.followUp, TODAY) + 'd' : '') + '</span>';
+  return '<span class="chip blue">Waiting' + (k.req ? ' since ' + fmt(k.req) : '') + '</span>';
+}
+function dcard(x) { const n = next(x), p = prio(x), items = curStep(x) === 0 ? (x.costing || []) : [];
+  const tag = p < 3 ? '<span class="chip ' + PRIO[p][1] + '">' + PRIO[p][0] + '</span>' : '';
+  return '<div class="card dcard" data-open="' + x.id + '"><div class="who"><div class="row" style="gap:8px">' + tag + '<button class="title" data-open="' + x.id + '">' + esc(x.customer) + ' <span class="muted" style="font-weight:400">· ' + esc(x.project) + '</span></button></div>' +
+    '<div class="next"><span class="' + (n.tone === 'red' ? 't-red' : n.tone === 'amber' ? 't-amber' : '') + '">' + esc(n.text) + '</span>' + (n.sub ? ' <span class="muted">· ' + esc(n.sub) + '</span>' : '') + '</div>' +
+    (items.length ? '<ul class="mini">' + items.slice(0, 5).map((k) => '<li><span>' + esc(k.n) + (k.sup ? ' <span class="muted">→ ' + esc(k.sup) + '</span>' : '') + '</span>' + itemChip(k) + '</li>').join('') + (items.length > 5 ? '<li class="muted">+' + (items.length - 5) + ' more</li>' : '') + '</ul>' : '') + '</div>' +
+    dl(x) + (n.act ? '<button class="btn sm ' + (p === 0 ? 'primary' : p === 1 ? 'ok' : '') + '" data-do="' + n.act + '" data-id="' + x.id + '"' + (n.i != null ? ' data-i="' + n.i + '"' : '') + '>' + n.label + '</button>' : '') + '</div>'; }
 function viewToday() {
-  const open = S.deals.filter((x) => !x.outcome); const sortD = (a, b) => ((a.deadline || '9') < (b.deadline || '9') ? -1 : 1);
-  const now = open.filter(urgent).sort(sortD), ready = open.filter((x) => !urgent(x) && next(x).grp === 'ready').sort(sortD), wait = open.filter((x) => !urgent(x) && next(x).grp === 'wait').sort(sortD);
-  let h = '<div class="wrap"><h1>Today · ' + fmt(TODAY) + '</h1><p class="muted" style="margin:4px 0 0">' + now.length + ' to do now · ' + ready.length + ' ready for you · ' + wait.length + ' waiting on others' + (S.inbox.length ? ' · <button class="link" data-nav="inbox">' + S.inbox.length + ' new email' + (S.inbox.length > 1 ? 's' : '') + ' in Inbox</button>' : '') + '</p>';
-  if (!S.deals.length) h += '<div class="card" style="padding:20px;margin-top:20px"><h2>No deals yet</h2><p class="muted">Connect your Gmail in Settings, or add a deal with “+ New deal”.</p></div>';
-  h += section('Do now', 'var(--red)', now, 'Nothing urgent.') + section('Ready for you', 'var(--ok)', ready, 'Nothing ready.') + section('Waiting on others', 'var(--blue)', wait, 'Nothing waiting.');
+  const open = S.deals.filter((x) => !x.outcome);
+  const sorted = open.slice().sort((a, b) => prio(a) - prio(b) || ((a.deadline || '9') < (b.deadline || '9') ? -1 : (a.deadline || '9') > (b.deadline || '9') ? 1 : 0));
+  const cnt = [0, 0, 0]; open.forEach((x) => { cnt[prio(x)]++; });
+  let h = '<div class="wrap"><h1>Today · ' + fmt(TODAY) + '</h1><p class="muted" style="margin:4px 0 0"><span class="t-red">' + cnt[0] + ' do now</span> · <span style="color:var(--ok)">' + cnt[1] + ' ready</span> · <span style="color:var(--blue)">' + cnt[2] + ' waiting</span>' + (S.inbox.length ? ' · <button class="link" data-nav="inbox">' + S.inbox.length + ' new email' + (S.inbox.length > 1 ? 's' : '') + ' in Inbox</button>' : '') + '</p>';
+  if (!S.deals.length) h += '<div class="card" style="padding:20px;margin-top:20px"><h2>No deals yet</h2><p class="muted">Add a deal with “+ New deal” – Claude then reads your Gmail for it.</p></div>';
+  h += '<div class="cards" style="margin-top:18px">' + sorted.map(dcard).join('') + '</div>';
   const closed = S.deals.filter((x) => x.outcome); if (closed.length) h += '<details class="fold"><summary><span class="car">▸</span><span class="chip">' + closed.length + '</span>Won / lost</summary><div class="cards" style="margin-top:8px">' + closed.map(dcard).join('') + '</div></details>';
   return h + '</div>';
 }
@@ -158,15 +181,21 @@ function viewDeal() {
   const c = cost(x), cs = curStep(x), g = x.generated, d = x.d || {};
   let h = '<div class="wrap"><button class="back" data-nav="today">← Today</button><div class="row" style="justify-content:space-between;align-items:flex-start;margin-top:4px"><div><h1>' + esc(x.customer) + '</h1><p class="muted" style="margin:2px 0 0">' + esc(x.project) + ' · ' + (x.sales ? esc(x.sales) : '<span class="t-amber">Sales owner?</span>') + ' · ' + esc(x.supplier || 'Supplier?') + '</p></div>' + dl(x) + '</div><div class="steps">';
   // 1 Costing
+  const sc = x.scan || {};
   let b1 = '';
-  if (!d.priceReq) b1 += '<p style="margin:0 0 10px">Price not requested yet.</p><button class="btn primary" data-do="priceReq" data-id="' + x.id + '">Request price from ' + esc(x.supplier || 'supplier') + '</button>';
-  b1 += '<ul class="slist">' + (x.costing || []).map((k, j) => '<li><span class="nm">' + esc(k.n) + ' <span class="muted">· ' + esc(k.t || '') + '</span></span>' +
-    (k.status === 'waiting' ? '<span class="chip amber">Waiting</span><button class="btn sm ghost" data-rcv="' + j + '">Mark received</button>' : k.status === 'estimate' ? '<span class="chip amber">Estimate</span>' : '<span class="chip green">Received ' + fmt(k.d) + '</span>') + '</li>').join('') + '</ul>';
-  b1 += '<form class="row" data-form="addCost" style="margin-top:8px"><input name="n" placeholder="+ Add cost source (e.g. SoW man-days)" aria-label="Add cost source" style="flex:1 1 220px;min-height:36px;padding:0 10px;border:1px solid #C3CDDA;border-radius:6px"><select name="t" aria-label="From" style="min-height:36px;border:1px solid #C3CDDA;border-radius:6px;background:#fff"><option>Supplier</option><option>Procurement</option><option>Technical</option></select><button class="btn sm">Add</button></form>';
-  if (d.priceReq && !c.all) b1 += '<div class="row" style="margin-top:10px"><button class="btn ' + (next(x).tone === 'red' ? 'primary' : '') + '" data-do="follow" data-id="' + x.id + '">Follow up</button><span class="muted">Next follow-up ' + fmt(x.followUp) + '</span></div>';
-  else if (cs === 0 && c.all) b1 += '<div class="row" style="margin-top:10px"><button class="btn ok" data-act="costsDone">Costs complete – build quote</button></div>';
-  if ((x.files || []).length) b1 += '<h2 style="margin-top:14px">Files from email</h2><ul class="files">' + x.files.map((f) => '<li><a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.name) + '</a></li>').join('') + '</ul>';
-  h += stepBox(x, 0, 'Costing', d.priceRcv ? 'Costs complete ' + fmt(d.priceRcv) : !d.priceReq ? 'Not requested' : c.got + ' of ' + c.total + ' received', b1);
+  if (x.requirement) b1 += '<p style="margin:0 0 8px"><b>Requirement:</b> ' + esc(x.requirement) + '</p>';
+  b1 += '<div class="row" style="margin-bottom:6px;font-size:13px">' + (sc.status === 'queued' || sc.status === 'reading' ? '<span class="t-amber"><span class="spin"></span> Claude is reading Gmail for this deal (up to 5 min)…</span>' :
+    sc.status === 'done' ? '<span class="muted">Claude read ' + (sc.emails || 0) + ' email(s) · ' + esc(new Date(sc.at).toLocaleString()) + '</span>' :
+    sc.status === 'no-connector' ? '<span class="t-amber">Connect Gmail in Settings so Claude can read this deal.</span>' : sc.status === 'error' ? '<span class="t-red">Claude could not read: ' + esc(sc.error || '') + '</span>' : '') +
+    '<button class="btn sm ghost" data-act="scan"' + (sc.status === 'queued' || sc.status === 'reading' ? ' disabled' : '') + '>Read Gmail again</button></div>';
+  b1 += '<ul class="slist">' + (x.costing || []).map((k, j) => '<li><span class="nm"><b style="font-weight:500">' + esc(k.n) + '</b> <span class="muted">→ ' + esc(k.sup || '?') + ' · ' + esc(k.t || '') + '</span>' + (k.note ? '<br><span class="muted" style="font-size:12px">' + esc(k.note) + '</span>' : '') + '</span>' + itemChip(k) +
+    (k.status === 'todo' ? '<button class="btn sm primary" data-do="reqItem" data-id="' + x.id + '" data-i="' + j + '">Draft request</button><button class="btn sm ghost" data-rcv="' + j + '">Received</button>' :
+     k.status === 'waiting' ? '<button class="btn sm ' + (k.followUp && k.followUp <= TODAY ? 'primary' : '') + '" data-do="followItem" data-id="' + x.id + '" data-i="' + j + '">Follow up</button><button class="btn sm ghost" data-rcv="' + j + '">Received</button>' : '') +
+    '<button class="ibtn" style="width:28px;height:28px;border:none" data-delcost="' + j + '" aria-label="Remove ' + esc(k.n) + '">' + XI + '</button></li>').join('') + '</ul>';
+  b1 += '<form class="row" data-form="addCost" style="margin-top:8px"><input name="n" placeholder="+ Item (e.g. Windows Server licence)" aria-label="Item" style="flex:2 1 200px;min-height:36px;padding:0 10px;border:1px solid #C3CDDA;border-radius:6px"><input name="sup" placeholder="Supplier" aria-label="Supplier" style="flex:1 1 120px;min-height:36px;padding:0 10px;border:1px solid #C3CDDA;border-radius:6px"><select name="t" aria-label="From" style="min-height:36px;border:1px solid #C3CDDA;border-radius:6px;background:#fff"><option>Supplier</option><option>Procurement</option><option>Technical</option></select><button class="btn sm">Add</button></form>';
+  if (cs === 0 && c.all) b1 += '<div class="row" style="margin-top:10px"><button class="btn ok" data-act="costsDone">Costs complete – build quote</button></div>';
+  if ((x.files || []).length) b1 += '<details class="fold" style="margin-top:10px"><summary><span class="car">▸</span>Files from email (' + x.files.length + ')</summary><ul class="files">' + x.files.map((f) => '<li><a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.name) + '</a></li>').join('') + '</ul></details>';
+  h += stepBox(x, 0, 'Costing', d.priceRcv ? 'Costs complete ' + fmt(d.priceRcv) : !(x.costing || []).length ? 'No items yet' : c.got + ' of ' + c.total + ' received' + (c.todo.length ? ' · ' + c.todo.length + ' not requested' : '') + (c.overdue.length ? ' · ' + c.overdue.length + ' follow-up due' : ''), b1);
   // 2 Quote
   let b2 = '';
   if (cs < 1 && !S.open[x.id + 'force']) b2 = '<p class="muted" style="margin:0">Opens when costing is complete. <button class="btn sm ghost" data-act="force">Build anyway</button></p>';
@@ -184,8 +213,7 @@ function viewDeal() {
     '<div class="row"><button class="btn" data-do="custFollow" data-id="' + x.id + '">Log follow-up</button><button class="btn ok" data-out="won">Won (PO)</button><button class="btn" data-out="lost">Lost</button></div>');
   h += stepBox(x, 3, 'Release', d.released ? 'Released ' + fmt(d.released) : '', b4);
   h += '</div><details class="fold"><summary><span class="car">▸</span>Details &amp; activity</summary><div class="card" style="padding:16px;margin-top:8px"><div class="costs" style="margin-top:0">' +
-    '<label class="field">Customer deadline<input type="date" data-edit="deadline" value="' + (x.deadline || '') + '"></label><label class="field">Next follow-up<input type="date" data-edit="followUp" value="' + (x.followUp || '') + '"></label>' +
-    '<label class="field">Sales owner<input data-edit="sales" list="sales" value="' + esc(x.sales || '') + '"></label><label class="field">Supplier<input data-edit="supplier" value="' + esc(x.supplier || '') + '"></label></div>' +
+    '<label class="field">Customer deadline<input type="date" data-edit="deadline" value="' + (x.deadline || '') + '"></label><label class="field">Sales owner<input data-edit="sales" list="sales" value="' + esc(x.sales || '') + '"></label><label class="field">Supplier<input data-edit="supplier" value="' + esc(x.supplier || '') + '"></label></div>' +
     '<ul class="log">' + (x.log || []).map((l) => '<li><span class="muted">' + fmt(l.d) + '</span> – ' + esc(l.t) + (l.by ? ' <span class="muted">· ' + esc(l.by) + '</span>' : '') + '</li>').join('') + '</ul></div></details></div>';
   if ((x.lines || []).length && stepOpen(x, 1) && (cs >= 1 || S.open[x.id + 'force'])) h += stickyBar(x);
   return h;
@@ -356,7 +384,7 @@ document.addEventListener('submit', async (e) => {
   const f = e.target; e.preventDefault();
   if (f.dataset.auth) return onAuth(f);
   if (f.id === 'composer') { const v = $('#cin').value.trim(); if (!v) return; $('#cin').value = ''; return sendChat(v); }
-  if (f.dataset.form === 'addCost') { const x = byId(S.sel); const v = Object.fromEntries(new FormData(f).entries()); if (!v.n.trim()) return; mutate(x, () => { x.costing = x.costing || []; x.costing.push({ n: v.n.trim(), t: v.t, status: 'waiting' }); if (x.d.priceRcv && !x.d.drafted) delete x.d.priceRcv; log(x, 'Added cost source: ' + v.n.trim()); }, 'Cost source added'); }
+  if (f.dataset.form === 'addCost') { const x = byId(S.sel); const v = Object.fromEntries(new FormData(f).entries()); if (!v.n.trim()) return; mutate(x, () => { x.costing = x.costing || []; x.costing.push({ n: v.n.trim(), sup: (v.sup || '').trim(), t: v.t, status: 'todo', by: 'user' }); if (x.d.priceRcv && !x.d.drafted) delete x.d.priceRcv; log(x, 'Added item: ' + v.n.trim()); }, 'Item added'); }
   if (f.dataset.form === 'newDeal') {
     const v = Object.fromEntries(new FormData(f).entries()); const btn = f.querySelector('.primary'); btn.disabled = true;
     const deal = { customer: v.customer, project: v.project, supplier: v.supplier, sales: v.sales, deadline: v.deadline || null, costing: v.costing ? v.costing.split(',').map((s) => s.trim()).filter(Boolean) : [] };
@@ -373,9 +401,10 @@ document.addEventListener('click', async (e) => {
   if ((b = q('[data-chip]'))) { $('#cin').value = b.dataset.chip; $('#cin').focus(); return; }
   if ((b = q('[data-copy]'))) { try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copied'); } catch (err) { toast('Copy blocked – select the text'); } return; }
   if ((b = q('[data-nav]'))) { S.view = b.dataset.nav; S.sel = null; render(); $('#main').scrollTop = 0; if (S.view === 'settings' && !S.demo) api('auth.me').then((u) => { S.user = u; render(); }).catch(() => {}); return; }
-  if ((b = q('[data-do]'))) { e.stopPropagation(); act(b.dataset.do, byId(b.dataset.id)); return; }
+  if ((b = q('[data-do]'))) { e.stopPropagation(); act(b.dataset.do, byId(b.dataset.id), b.dataset.i); return; }
   const x = S.sel ? byId(S.sel) : null;
-  if ((b = q('[data-rcv]')) && x) { const k = x.costing[+b.dataset.rcv]; mutate(x, () => { k.status = 'received'; k.d = TODAY; log(x, 'Received: ' + k.n); if (cost(x).all && x.d.priceReq && !x.d.priceRcv) { x.d.priceRcv = TODAY; log(x, 'Costs complete'); } }, cost(x).waiting.length === 1 ? 'Costs complete – Quote step is open' : 'Marked received'); return; }
+  if ((b = q('[data-rcv]')) && x) { const k = x.costing[+b.dataset.rcv]; const last = cost(x).open.length === 1; mutate(x, () => { k.status = 'received'; k.d = TODAY; log(x, 'Received: ' + itemName(k)); if (cost(x).all && !x.d.priceRcv) { x.d.priceReq = x.d.priceReq || TODAY; x.d.priceRcv = TODAY; log(x, 'Costs complete'); } }, last ? 'Costs complete – Quote step is open' : 'Marked received'); return; }
+  if ((b = q('[data-delcost]')) && x) { const j = +b.dataset.delcost; const n = x.costing[j].n; mutate(x, () => { x.costing.splice(j, 1); log(x, 'Removed item: ' + n); }, 'Item removed'); return; }
   if ((b = q('[data-mail]')) && x) { email(b.dataset.mail, x); return; }
   if ((b = q('[data-out]')) && x) { mutate(x, () => { x.outcome = b.dataset.out; log(x, x.outcome === 'won' ? 'Won – PO received' : 'Lost'); }, 'Marked ' + b.dataset.out); return; }
   if ((b = q('[data-delline]')) && x) { const j = +b.dataset.delline; mutate(x, () => { x.lines.splice(j, 1); }, 'Line removed'); return; }
@@ -396,6 +425,7 @@ document.addEventListener('click', async (e) => {
   else if (a === 'newKey') { try { S.user = await api('auth.newConnectKey'); render(); toast('New key made – update it in your Connector script'); } catch (err) { toast(err.message); } }
   else if (a === 'install' && S.installEvt) { S.installEvt.prompt(); S.installEvt = null; render(); }
   else if (a === 'force' && x) { S.open[x.id + 'force'] = true; S.open[x.id + 1] = true; render(); }
+  else if (a === 'scan' && x) { try { const r = await api('deals.scan', { dealId: x.id }); x.scan = { status: r.queued ? 'queued' : 'no-connector', at: new Date().toISOString() }; render(); toast(r.queued ? 'Claude will read Gmail for this deal within 5 minutes' : 'Connect Gmail in Settings first'); } catch (err) { toast(err.message); } }
   else if (a === 'costsDone' && x) mutate(x, () => { x.d.priceRcv = TODAY; log(x, 'Costs complete'); }, 'Costs complete – Quote step is open');
   else if (a === 'addLine' && x) { x.lines = x.lines || []; x.lines.push({ inc: true, cat: 'Hardware', desc: '', pn: '', qty: 1, cost: 0, wht: false }); if (cs1(x)) { S.open[x.id + 'force'] = true; S.open[x.id + 1] = true; } render(); saveSoon(x); }
   else if (a === 'extract' && x) { S.busy.extract = true; render(); try { const d = await api('claude.extract', { dealId: x.id }); Object.assign(x, d); toast('Claude found ' + (d.lines || []).length + ' cost lines – check them'); } catch (err) { toast(err.message); } S.busy.extract = false; render(); }
@@ -429,6 +459,7 @@ $('#grip').addEventListener('pointerdown', (e) => { e.preventDefault(); const c 
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.installEvt = e; if (S.view === 'settings') render(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) loadAll(); });
 setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length) loadAll(); }, 5 * 60 * 1000);
+setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && S.deals.some((d) => d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading'))) loadAll(); }, 30 * 1000);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // datalists for names
