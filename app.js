@@ -163,7 +163,7 @@ function viewToday() {
   const open = S.deals.filter((x) => !x.outcome);
   const sorted = open.slice().sort((a, b) => prio(a) - prio(b) || ((a.deadline || '9') < (b.deadline || '9') ? -1 : (a.deadline || '9') > (b.deadline || '9') ? 1 : 0));
   const cnt = [0, 0, 0]; open.forEach((x) => { cnt[prio(x)]++; });
-  let h = '<div class="wrap"><h1>Today · ' + fmt(TODAY) + '</h1><p class="muted" style="margin:4px 0 0"><span class="t-red">' + cnt[0] + ' do now</span> · <span style="color:var(--ok)">' + cnt[1] + ' ready</span> · <span style="color:var(--blue)">' + cnt[2] + ' waiting</span>' + (S.inbox.length ? ' · <button class="link" data-nav="inbox">' + S.inbox.length + ' new email' + (S.inbox.length > 1 ? 's' : '') + ' in Inbox</button>' : '') + '</p>';
+  let h = '<div class="wrap"><h1>Today · ' + fmt(TODAY) + '</h1><p class="muted" style="margin:4px 0 0"><span class="t-red">' + cnt[0] + ' do now</span> · <span style="color:var(--ok)">' + cnt[1] + ' ready</span> · <span style="color:var(--blue)">' + cnt[2] + ' waiting</span>' + '</p>';
   if (!S.deals.length) h += '<div class="card" style="padding:20px;margin-top:20px"><h2>No deals yet</h2><p class="muted">Add a deal with “+ New deal” – Claude then reads your Gmail for it.</p></div>';
   h += '<div class="cards" style="margin-top:18px">' + sorted.map(dcard).join('') + '</div>';
   const closed = S.deals.filter((x) => x.outcome); if (closed.length) h += '<details class="fold"><summary><span class="car">▸</span><span class="chip">' + closed.length + '</span>Won / lost</summary><div class="cards" style="margin-top:8px">' + closed.map(dcard).join('') + '</div></details>';
@@ -184,7 +184,7 @@ function viewDeal() {
   const sc = x.scan || {};
   let b1 = '';
   if (x.requirement) b1 += '<p style="margin:0 0 8px"><b>Requirement:</b> ' + esc(x.requirement) + '</p>';
-  b1 += '<div class="row" style="margin-bottom:6px;font-size:13px">' + (sc.status === 'queued' || sc.status === 'reading' ? '<span class="t-amber"><span class="spin"></span> Claude is reading Gmail for this deal (up to 5 min)…</span>' :
+  b1 += '<div class="row" style="margin-bottom:6px;font-size:13px">' + (sc.status === 'queued' ? '<span class="t-amber"><span class="spin"></span> Waiting for the next Gmail check (every 5 min)…</span>' : sc.status === 'reading' ? '<span class="t-amber"><span class="spin"></span> Claude is reading ' + (sc.emails || '') + ' email(s) for this deal (about 1 min)…</span>' :
     sc.status === 'done' ? '<span class="muted">Claude read ' + (sc.emails || 0) + ' email(s) · ' + esc(new Date(sc.at).toLocaleString()) + '</span>' :
     sc.status === 'no-connector' ? '<span class="t-amber">Connect Gmail in Settings so Claude can read this deal.</span>' : sc.status === 'error' ? '<span class="t-red">Claude could not read: ' + esc(sc.error || '') + '</span>' : '') +
     '<button class="btn sm ghost" data-act="scan"' + (sc.status === 'queued' || sc.status === 'reading' ? ' disabled' : '') + '>Read Gmail again</button></div>';
@@ -262,15 +262,18 @@ function patch() { const x = byId(S.sel); if (!x) return; const r = calc(x); con
 /* ---------- views: inbox ---------- */
 const KIND = { supplier_pricing: 'Supplier price', customer_request: 'Customer request', sow: 'SoW', procurement_price: 'Procurement price', deal_registration: 'Deal registration', internal_followup: 'Internal', other: 'Other' };
 function viewInbox() {
-  let h = '<div class="wrap"><h1>Inbox</h1><p class="muted" style="margin:4px 0 16px">Emails Claude could not match for sure. Clear matches are attached to deals automatically.</p>';
+  const ready = S.inbox.filter((m) => !m.pending), pend = S.inbox.length - ready.length;
+  let h = '<div class="wrap"><div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Inbox</h1><p class="muted" style="margin:4px 0 0">Emails Claude could not match for sure. Clear matches go to their deal automatically; receipts and internal emails are skipped.</p></div>' +
+    (ready.length ? '<button class="btn" data-act="skipAll">Skip all ' + ready.length + '</button>' : '') + '</div>' +
+    (pend ? '<p class="t-amber" style="margin:12px 0 0"><span class="spin"></span> Claude is sorting ' + pend + ' new email(s)…</p>' : '') + '<div style="height:16px"></div>';
   if (!S.inbox.length) return h + '<div class="card" style="padding:20px"><p style="margin:0">All clear – nothing to sort.</p></div></div>';
   const opts = S.deals.filter((d) => !d.outcome).map((d) => '<option value="' + d.id + '">' + esc(d.customer + ' · ' + d.project) + '</option>').join('');
-  h += '<div class="card">' + S.inbox.map((m) => { const sug = m.dealId && byId(m.dealId);
+  h += (ready.length ? '<div class="card">' + ready.map((m) => { const sug = m.dealId && byId(m.dealId);
     return '<div class="ibox"><div class="row" style="justify-content:space-between"><b>' + esc(m.subject) + '</b><span class="chip">' + (KIND[m.kind] || m.kind) + '</span></div><div class="muted" style="font-size:13px">' + esc(m.from) + ' · ' + fmt(m.date) + (m.link ? ' · <a href="' + esc(m.link) + '" target="_blank" rel="noopener">Open in Gmail</a>' : '') + '</div>' +
       '<p style="margin:6px 0">' + esc(m.summary) + '</p>' + ((m.files || []).length ? '<ul class="files">' + m.files.map((f) => '<li><a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.name) + '</a></li>').join('') + '</ul>' : '') +
       '<div class="row" style="margin-top:8px">' + (sug ? '<button class="btn sm ok" data-assign="' + m.id + '" data-deal="' + sug.id + '">Attach to ' + esc(sug.customer) + '</button>' : '') +
       '<select aria-label="Attach to deal" data-pick="' + m.id + '" style="min-height:34px;border:1px solid #C3CDDA;border-radius:8px;background:#fff;max-width:260px"><option value="">Attach to another deal…</option>' + opts + '</select>' +
-      '<button class="btn sm" data-newfrom="' + m.id + '">New deal</button><button class="btn sm ghost" data-skip="' + m.id + '">Skip</button></div></div>'; }).join('') + '</div>';
+      '<button class="btn sm" data-newfrom="' + m.id + '">New deal</button><button class="btn sm ghost" data-skip="' + m.id + '">Skip</button></div></div>'; }).join('') + '</div>' : '');
   return h + '</div>';
 }
 
@@ -290,7 +293,7 @@ function viewSettings() {
   let h = '<div class="wrap"><h1>Settings</h1>';
   h += '<div class="card" style="padding:18px;margin-top:16px"><h2>Your account</h2><p style="margin:6px 0 0">' + esc(u.name) + ' · ' + esc(u.email) + ' · <span class="chip">' + esc(u.role) + '</span></p><div class="row" style="margin-top:12px"><button class="btn" data-act="signout">Sign out</button></div></div>';
   h += '<div class="card" style="padding:18px;margin-top:12px"><div class="row" style="justify-content:space-between"><h2>Connect your Gmail</h2>' + (connected ? '<span class="chip green">Connected' + (u.gmail ? ' as ' + esc(u.gmail) : '') + ' · last checked ' + esc(new Date(u.lastScan).toLocaleString()) + '</span>' : '<span class="chip amber">Not connected</span>') + '</div>' +
-    '<p class="muted" style="margin:6px 0 10px">A small script in your own Google account checks Gmail every 5 minutes and sends deal emails (quotes, BOQ, SoW, price files) to Quote Desk. It never sends or deletes email.</p>' +
+    '<p class="muted" style="margin:6px 0 10px">Every 5 minutes it looks in your Gmail <b>only for the deals you create</b> here (customer BoM, supplier quotes, SoW) and sends new ones to Quote Desk. Claude reads only when a deal has a new email. It never sends or deletes email.</p>' +
     '<div class="field">Your connect key – keep it private</div><div class="keybox"><span id="ckey" style="flex:1 1 200px">' + esc(S.showKey ? u.connectKey : (u.connectKey || '').slice(0, 6) + '••••••••••••') + '</span><button class="btn sm" data-act="showKey">' + (S.showKey ? 'Hide' : 'Show') + '</button><button class="btn sm" data-copy="' + esc(u.connectKey) + '">Copy</button><button class="btn sm ghost" data-act="newKey">New key</button></div>' +
     (apiUrl ? '<div class="field" style="margin-top:10px">API URL</div><div class="keybox"><span style="flex:1 1 200px">' + esc(apiUrl) + '</span><button class="btn sm" data-copy="' + esc(apiUrl) + '">Copy</button></div>' : '') +
     (u.connectorAppUrl
@@ -355,7 +358,7 @@ function layoutChat() { const c = $('#chat'); c.className = S.chat === 'pop' ? '
 /* ---------- render ---------- */
 function render() {
   document.querySelectorAll('[data-nav]').forEach((b) => { if (b.closest('.nav')) b.setAttribute('aria-current', (S.view === b.dataset.nav || (S.view === 'deal' && b.dataset.nav === 'today')) ? 'page' : 'false'); });
-  const bd = $('#inboxBadge'); bd.hidden = !S.inbox.length; bd.textContent = S.inbox.length;
+  const nIn = S.inbox.filter((m) => !m.pending).length; const bd = $('#inboxBadge'); bd.hidden = !nIn; bd.textContent = nIn;
   $('#demoPill').hidden = !S.demo;
   const scroll = $('#main').scrollTop;
   $('#main').innerHTML = S.view === 'deal' ? viewDeal() : S.view === 'inbox' ? viewInbox() : S.view === 'settings' ? viewSettings() : viewToday();
@@ -378,8 +381,8 @@ function newDealForm(pre, fromInbox) {
 /* ---------- data ---------- */
 async function loadAll() {
   try {
-    const [deals, inbox] = await Promise.all([api('deals.list'), api('inbox.list')]);
-    S.deals = deals || []; S.inbox = inbox || []; render();
+    const deals = await api('deals.list');
+    S.deals = deals || []; S.inbox = []; render();
   } catch (e) { toast(e.message); }
 }
 async function startApp() {
@@ -433,6 +436,7 @@ document.addEventListener('click', async (e) => {
   else if (a === 'refresh') { await loadAll(); toast('Updated'); }
   else if (a === 'newDeal') newDealForm();
   else if (a === 'disconnectGmail') { window.open(connUrl(S.user.connectorAppUrl, connEmail(S.user), 'action=disconnect'), '_blank', 'noopener'); toast('Disconnected – press ↻ to refresh'); }
+  else if (a === 'skipAll') { const ids = S.inbox.filter((m) => !m.pending).map((m) => m.id); try { await api('inbox.skipAll', { ids }); S.inbox = S.inbox.filter((m) => m.pending); render(); toast('Skipped ' + ids.length + ' email(s)'); } catch (err) { toast(err.message); } }
   else if (a === 'showKey') { S.showKey = !S.showKey; render(); }
   else if (a === 'newKey') { try { S.user = await api('auth.newConnectKey'); render(); toast('New key made – update it in your Connector script'); } catch (err) { toast(err.message); } }
   else if (a === 'install' && S.installEvt) { S.installEvt.prompt(); S.installEvt = null; render(); }
@@ -471,7 +475,7 @@ $('#grip').addEventListener('pointerdown', (e) => { e.preventDefault(); const c 
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.installEvt = e; if (S.view === 'settings') render(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) loadAll(); });
 setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length) loadAll(); }, 5 * 60 * 1000);
-setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && S.deals.some((d) => d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading'))) loadAll(); }, 30 * 1000);
+setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && (S.deals.some((d) => d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading')) || S.inbox.some((m) => m.pending))) loadAll(); }, 30 * 1000);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // datalists for names
