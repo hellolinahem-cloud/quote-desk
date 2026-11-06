@@ -1,0 +1,90 @@
+/**
+ * Quote Desk – Gmail Connector
+ * Each user runs their own copy in their own Google account. It never deletes or sends email.
+ *
+ * Setup (2 minutes):
+ *   1. Paste your Connect key from Quote Desk > Settings into CONNECT_KEY below.
+ *   2. Paste the Quote Desk API URL into API_URL (also shown in Settings).
+ *   3. Select "setup" in the toolbar and press Run. Allow access when Google asks.
+ * After that it checks Gmail every 15 minutes. Run "scanNow" any time to test.
+ */
+
+var CONNECT_KEY = 'PASTE_YOUR_CONNECT_KEY_HERE';
+var API_URL = 'PASTE_QUOTE_DESK_API_URL_HERE';
+
+// Which emails to send to Quote Desk. Only deal-like emails – not your whole mailbox.
+var SEARCH = 'newer_than:3d -in:chats -in:spam -in:trash ' +
+  '(has:attachment OR subject:(quote OR quotation OR price OR pricing OR proposal OR BOQ OR SoW OR RFQ OR "||"))';
+var SKIP_SUBJECT = /\b(invoice|delivery note|payslip|newsletter|unsubscribe)\b/i;
+var ATTACH_OK = /\.(pdf|xlsx|xls|csv|docx|doc)$/i;
+var MAX_ATTACH_BYTES = 10 * 1024 * 1024;
+var BATCH = 4;
+
+function setup() {
+  if (CONNECT_KEY.indexOf('qd_') !== 0) throw new Error('Paste your Connect key first.');
+  if (API_URL.indexOf('https://') !== 0) throw new Error('Paste the Quote Desk API URL first.');
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'scanNow') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('scanNow').timeBased().everyMinutes(15).create();
+  scanNow();
+  Logger.log('Connected. Quote Desk will check your Gmail every 15 minutes.');
+}
+
+function disconnect() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  Logger.log('Disconnected. No more emails will be sent to Quote Desk.');
+}
+
+function scanNow() {
+  var props = PropertiesService.getUserProperties();
+  var seen = JSON.parse(props.getProperty('seen') || '[]');
+  var seenSet = {};
+  seen.forEach(function (id) { seenSet[id] = true; });
+  var me = Session.getActiveUser().getEmail().toLowerCase();
+
+  var batch = [];
+  var sent = 0;
+  GmailApp.search(SEARCH, 0, 40).forEach(function (thread) {
+    thread.getMessages().forEach(function (m) {
+      var id = m.getId();
+      if (seenSet[id]) return;
+      seenSet[id] = true; seen.push(id);
+      if (SKIP_SUBJECT.test(m.getSubject())) return;
+      if (String(m.getFrom()).toLowerCase().indexOf(me) >= 0 && !m.getAttachments().length) return; // my own replies without files
+      batch.push(pack(m, thread));
+      if (batch.length >= BATCH) { sent += send(batch); batch = []; }
+    });
+  });
+  if (batch.length) sent += send(batch);
+  props.setProperty('seen', JSON.stringify(seen.slice(-800)));
+  if (!sent) send([]); // heartbeat so Quote Desk shows "last checked"
+  Logger.log('Sent ' + sent + ' email(s) to Quote Desk.');
+}
+
+function pack(m, thread) {
+  var atts = m.getAttachments({ includeInlineImages: false }).filter(function (a) {
+    return ATTACH_OK.test(a.getName()) && a.getSize() <= MAX_ATTACH_BYTES;
+  }).slice(0, 6).map(function (a) {
+    return { name: a.getName(), mimeType: a.getContentType(), b64: Utilities.base64Encode(a.getBytes()) };
+  });
+  return {
+    id: m.getId(), threadId: thread.getId(),
+    from: m.getFrom(), to: m.getTo(), subject: m.getSubject(),
+    date: Utilities.formatDate(m.getDate(), 'Asia/Phnom_Penh', "yyyy-MM-dd'T'HH:mm"),
+    link: 'https://mail.google.com/mail/u/0/#all/' + thread.getId(),
+    body: String(m.getPlainBody() || '').slice(0, 8000),
+    attachments: atts
+  };
+}
+
+function send(emails) {
+  var res = UrlFetchApp.fetch(API_URL, {
+    method: 'post', contentType: 'text/plain', muteHttpExceptions: true, followRedirects: true,
+    payload: JSON.stringify({ action: 'connector.ingest', connectKey: CONNECT_KEY, emails: emails })
+  });
+  var out = {};
+  try { out = JSON.parse(res.getContentText()); } catch (e) { throw new Error('Quote Desk did not answer: ' + res.getResponseCode()); }
+  if (!out.ok) throw new Error('Quote Desk: ' + out.error);
+  return emails.length;
+}

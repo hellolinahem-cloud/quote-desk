@@ -1,0 +1,15 @@
+{
+  "name": "Quote Desk",
+  "short_name": "Quote Desk",
+  "description": "Deals, costing, GP and quotations for Biplan BD.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F6F8FB",
+  "theme_color": "#0B3A6E",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
