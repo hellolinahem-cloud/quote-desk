@@ -274,6 +274,15 @@ function viewInbox() {
   return h + '</div>';
 }
 
+
+/* ---------- Gmail connection ---------- */
+function connEmail(u) { return store.get('qd_conn_email') || (u && u.email) || ''; }
+function connUrl(base, email, query) {
+  const m = String(base).match(/\/macros\/s\/([^/]+)\/exec/); const dom = String(email).split('@')[1] || '';
+  const url = m && dom && !/^(gmail|googlemail)\.com$/i.test(dom) ? 'https://script.google.com/a/macros/' + dom + '/s/' + m[1] + '/exec' : base;
+  return url + '?' + query + '&authuser=' + encodeURIComponent(email);
+}
+
 /* ---------- views: settings ---------- */
 function viewSettings() {
   const u = S.user || {}; const connected = !!u.lastScan;
@@ -281,13 +290,14 @@ function viewSettings() {
   let h = '<div class="wrap"><h1>Settings</h1>';
   h += '<div class="card" style="padding:18px;margin-top:16px"><h2>Your account</h2><p style="margin:6px 0 0">' + esc(u.name) + ' · ' + esc(u.email) + ' · <span class="chip">' + esc(u.role) + '</span></p><div class="row" style="margin-top:12px"><button class="btn" data-act="signout">Sign out</button></div></div>';
   h += '<div class="card" style="padding:18px;margin-top:12px"><div class="row" style="justify-content:space-between"><h2>Connect your Gmail</h2>' + (connected ? '<span class="chip green">Connected' + (u.gmail ? ' as ' + esc(u.gmail) : '') + ' · last checked ' + esc(new Date(u.lastScan).toLocaleString()) + '</span>' : '<span class="chip amber">Not connected</span>') + '</div>' +
-    '<p class="muted" style="margin:6px 0 10px">A small script in your own Google account checks Gmail every 15 minutes and sends deal emails (quotes, BOQ, SoW, price files) to Quote Desk. It never sends or deletes email.</p>' +
+    '<p class="muted" style="margin:6px 0 10px">A small script in your own Google account checks Gmail every 5 minutes and sends deal emails (quotes, BOQ, SoW, price files) to Quote Desk. It never sends or deletes email.</p>' +
     '<div class="field">Your connect key – keep it private</div><div class="keybox"><span id="ckey" style="flex:1 1 200px">' + esc(S.showKey ? u.connectKey : (u.connectKey || '').slice(0, 6) + '••••••••••••') + '</span><button class="btn sm" data-act="showKey">' + (S.showKey ? 'Hide' : 'Show') + '</button><button class="btn sm" data-copy="' + esc(u.connectKey) + '">Copy</button><button class="btn sm ghost" data-act="newKey">New key</button></div>' +
     (apiUrl ? '<div class="field" style="margin-top:10px">API URL</div><div class="keybox"><span style="flex:1 1 200px">' + esc(apiUrl) + '</span><button class="btn sm" data-copy="' + esc(apiUrl) + '">Copy</button></div>' : '') +
     (u.connectorAppUrl
-      ? '<div class="row" style="margin-top:12px"><a class="btn primary" style="text-decoration:none;min-height:46px" target="_blank" rel="noopener" href="' + esc(u.connectorAppUrl + '?key=' + encodeURIComponent(u.connectKey || '')) + '">' + (connected ? 'Reconnect Gmail' : 'Connect Gmail') + '</a>' +
-        (connected ? '<a class="btn ghost" style="text-decoration:none" target="_blank" rel="noopener" href="' + esc(u.connectorAppUrl + '?action=disconnect') + '">Disconnect</a>' : '') + '</div>' +
-        '<p class="muted" style="margin:8px 0 0;font-size:13px">A Google page opens: choose your <b>work</b> Gmail account and click <b>Allow</b>. Then come back here and press ↻. If several Google accounts are signed in to Chrome, use a Chrome profile with only your work account.</p>' +
+      ? '<form class="row" data-form="connect" style="margin-top:14px;align-items:flex-end"><label class="field" style="flex:1 1 260px">Email to connect (your work Gmail)<input name="email" type="email" required value="' + esc(connEmail(u)) + '"></label>' +
+        '<button class="btn primary" style="min-height:44px">' + (connected ? 'Reconnect' : 'Connect Gmail') + '</button>' + (connected ? '<button type="button" class="btn ghost" data-act="disconnectGmail">Disconnect</button>' : '') + '</form>' +
+        (connected && u.gmail && u.gmail !== connEmail(u).toLowerCase() ? '<p class="t-amber" style="margin:8px 0 0">Quote Desk is reading <b>' + esc(u.gmail) + '</b>, not ' + esc(connEmail(u)) + '. Press <b>Reconnect</b> and choose ' + esc(connEmail(u)) + ' on the Google page.</p>' : '') +
+        '<p class="muted" style="margin:8px 0 0;font-size:13px">A Google page opens for this email – click <b>Allow</b>, then come back here and press ↻.</p>' +
         '<details class="fold" style="margin-top:8px"><summary><span class="car">▸</span>Set up by hand instead</summary>'
       : '') +
     '<ol class="howto"><li>Open <a href="' + esc(u.connectorUrl || 'connector.txt') + '" target="_blank" rel="noopener">' + (u.connectorUrl ? 'the Connector script' : 'the Connector code') + '</a>' + (u.connectorUrl ? ' and click <b>Make a copy</b>.' : ', go to <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com</a> → New project, and paste it.') + '</li>' +
@@ -385,6 +395,7 @@ document.addEventListener('submit', async (e) => {
   if (f.dataset.auth) return onAuth(f);
   if (f.id === 'composer') { const v = $('#cin').value.trim(); if (!v) return; $('#cin').value = ''; return sendChat(v); }
   if (f.dataset.form === 'addCost') { const x = byId(S.sel); const v = Object.fromEntries(new FormData(f).entries()); if (!v.n.trim()) return; mutate(x, () => { x.costing = x.costing || []; x.costing.push({ n: v.n.trim(), sup: (v.sup || '').trim(), t: v.t, status: 'todo', by: 'user' }); if (x.d.priceRcv && !x.d.drafted) delete x.d.priceRcv; log(x, 'Added item: ' + v.n.trim()); }, 'Item added'); }
+  if (f.dataset.form === 'connect') { const em = String(new FormData(f).get('email') || '').trim(); if (!em) return; store.set('qd_conn_email', em); window.open(connUrl(S.user.connectorAppUrl, em, 'key=' + encodeURIComponent(S.user.connectKey || '')), '_blank', 'noopener'); toast('Allow access on the Google page, then press ↻'); render(); return; }
   if (f.dataset.form === 'newDeal') {
     const v = Object.fromEntries(new FormData(f).entries()); const btn = f.querySelector('.primary'); btn.disabled = true;
     const deal = { customer: v.customer, project: v.project, supplier: v.supplier, sales: v.sales, deadline: v.deadline || null, costing: v.costing ? v.costing.split(',').map((s) => s.trim()).filter(Boolean) : [] };
@@ -421,6 +432,7 @@ document.addEventListener('click', async (e) => {
   else if (a === 'signout') signOut();
   else if (a === 'refresh') { await loadAll(); toast('Updated'); }
   else if (a === 'newDeal') newDealForm();
+  else if (a === 'disconnectGmail') { window.open(connUrl(S.user.connectorAppUrl, connEmail(S.user), 'action=disconnect'), '_blank', 'noopener'); toast('Disconnected – press ↻ to refresh'); }
   else if (a === 'showKey') { S.showKey = !S.showKey; render(); }
   else if (a === 'newKey') { try { S.user = await api('auth.newConnectKey'); render(); toast('New key made – update it in your Connector script'); } catch (err) { toast(err.message); } }
   else if (a === 'install' && S.installEvt) { S.installEvt.prompt(); S.installEvt = null; render(); }
