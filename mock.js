@@ -59,7 +59,7 @@
   ];
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const find = (id) => { const d = deals.find((x) => x.id === id); if (!d) throw new Error('Deal not found'); return d; };
-  const user = { email: 'demo@quotedesk.app', name: 'Lina (demo)', role: 'admin', connectKey: 'qd_demo_key_not_real', lastScan: '', connectorUrl: '', apiUrl: '' };
+  const user = { email: 'demo@quotedesk.app', name: 'Lina (demo)', role: 'admin', connectKey: 'qd_demo_key_not_real', lastScan: '', connectorUrl: '', connectorAppUrl: '', apiUrl: '' };
   function attach(item, dealId) {
     const d = find(dealId);
     d.files = (d.files || []).concat(item.files || []);

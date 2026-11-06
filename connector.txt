@@ -1,42 +1,94 @@
 /**
  * Quote Desk – Gmail Connector
- * Each user runs their own copy in their own Google account. It never deletes or sends email.
  *
- * Setup (2 minutes):
- *   1. Paste your Connect key from Quote Desk > Settings into CONNECT_KEY below.
- *   2. Paste the Quote Desk API URL into API_URL (also shown in Settings).
- *   3. Select "setup" in the toolbar and press Run. Allow access when Google asks.
- * After that it checks Gmail every 15 minutes. Run "scanNow" any time to test.
+ * ONE-CLICK MODE (recommended): the admin deploys this project once as a Web app
+ *   (Execute as: User accessing the web app · Who has access: Anyone with a Google account)
+ *   and saves its URL in the API's Script properties as CONNECTOR_APP_URL.
+ *   Each user then clicks "Connect Gmail" in Quote Desk > Settings – no copying, no code.
+ *
+ * MANUAL MODE (fallback): make a copy, paste your key into CONNECT_KEY, run setup().
+ *
+ * It only reads deal-like emails. It never sends or deletes email.
  */
 
-var CONNECT_KEY = 'PASTE_YOUR_CONNECT_KEY_HERE';
-var API_URL = 'PASTE_QUOTE_DESK_API_URL_HERE';
+var CONNECT_KEY = 'PASTE_YOUR_CONNECT_KEY_HERE';   // manual mode only – leave as is for one-click
+var API_URL = 'PASTE_QUOTE_DESK_API_URL_HERE';     // the Quote Desk API /exec URL
 
 // Which emails to send to Quote Desk. Only deal-like emails – not your whole mailbox.
 var SEARCH = 'newer_than:3d -in:chats -in:spam -in:trash ' +
   '(has:attachment OR subject:(quote OR quotation OR price OR pricing OR proposal OR BOQ OR SoW OR RFQ OR "||"))';
-var SKIP_SUBJECT = /\b(invoice|delivery note|payslip|newsletter|unsubscribe)\b/i;
+var SKIP_SUBJECT = /\b(invoice|receipt|statement|payment|delivery note|payslip|newsletter|unsubscribe|order confirmation)\b/i;
 var ATTACH_OK = /\.(pdf|xlsx|xls|csv|docx|doc)$/i;
 var MAX_ATTACH_BYTES = 10 * 1024 * 1024;
 var BATCH = 4;
 
+/* ---------- one-click web app ---------- */
+
+function doGet(e) {
+  var p = (e && e.parameter) || {};
+  try {
+    if (p.action === 'disconnect') {
+      removeTriggers();
+      PropertiesService.getUserProperties().deleteProperty('connectKey');
+      return page('Disconnected', 'Quote Desk will no longer read your Gmail. You can close this tab.');
+    }
+    var key = String(p.key || '');
+    if (key.indexOf('qd_') !== 0) return page('Missing key', 'Open this page from Quote Desk > Settings > Connect Gmail.');
+    PropertiesService.getUserProperties().setProperty('connectKey', key);
+    installTrigger();
+    var n = scanNow();
+    return page('Gmail connected ✓', 'Quote Desk will check your Gmail every 15 minutes (' + n + ' email(s) sent now). You can close this tab and go back to Quote Desk.');
+  } catch (err) {
+    return page('Could not connect', String(err.message || err));
+  }
+}
+
+function page(title, msg) {
+  var html = '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<div style="font-family:system-ui,sans-serif;max-width:460px;margin:15vh auto;padding:28px;border:1px solid #DDE3EC;border-radius:16px;color:#1A2433">' +
+    '<div style="width:36px;height:36px;border-radius:8px;background:#0B3A6E;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">B</div>' +
+    '<h1 style="font-size:22px;margin:16px 0 8px">' + title + '</h1><p style="color:#4A5668;line-height:1.5">' + msg + '</p></div>';
+  return HtmlService.createHtmlOutput(html).setTitle('Quote Desk – ' + title);
+}
+
+/* ---------- manual mode ---------- */
+
 function setup() {
   if (CONNECT_KEY.indexOf('qd_') !== 0) throw new Error('Paste your Connect key first.');
-  if (API_URL.indexOf('https://') !== 0) throw new Error('Paste the Quote Desk API URL first.');
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'scanNow') ScriptApp.deleteTrigger(t);
-  });
-  ScriptApp.newTrigger('scanNow').timeBased().everyMinutes(15).create();
+  PropertiesService.getUserProperties().setProperty('connectKey', CONNECT_KEY);
+  installTrigger();
   scanNow();
   Logger.log('Connected. Quote Desk will check your Gmail every 15 minutes.');
 }
 
 function disconnect() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  removeTriggers();
+  PropertiesService.getUserProperties().deleteProperty('connectKey');
   Logger.log('Disconnected. No more emails will be sent to Quote Desk.');
 }
 
+/* ---------- shared ---------- */
+
+function getKey() {
+  var k = PropertiesService.getUserProperties().getProperty('connectKey') || CONNECT_KEY;
+  if (String(k).indexOf('qd_') !== 0) throw new Error('No connect key. Connect again from Quote Desk > Settings.');
+  return k;
+}
+
+function installTrigger() {
+  if (API_URL.indexOf('https://') !== 0) throw new Error('API_URL is not set in the Connector script.');
+  removeTriggers();
+  ScriptApp.newTrigger('scanNow').timeBased().everyMinutes(15).create();
+}
+
+function removeTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'scanNow') ScriptApp.deleteTrigger(t);
+  });
+}
+
 function scanNow() {
+  var key = getKey();
   var props = PropertiesService.getUserProperties();
   var seen = JSON.parse(props.getProperty('seen') || '[]');
   var seenSet = {};
@@ -51,15 +103,16 @@ function scanNow() {
       if (seenSet[id]) return;
       seenSet[id] = true; seen.push(id);
       if (SKIP_SUBJECT.test(m.getSubject())) return;
-      if (String(m.getFrom()).toLowerCase().indexOf(me) >= 0 && !m.getAttachments().length) return; // my own replies without files
+      if (me && String(m.getFrom()).toLowerCase().indexOf(me) >= 0 && !m.getAttachments().length) return; // my own replies without files
       batch.push(pack(m, thread));
-      if (batch.length >= BATCH) { sent += send(batch); batch = []; }
+      if (batch.length >= BATCH) { sent += send(batch, key); batch = []; }
     });
   });
-  if (batch.length) sent += send(batch);
+  if (batch.length) sent += send(batch, key);
   props.setProperty('seen', JSON.stringify(seen.slice(-800)));
-  if (!sent) send([]); // heartbeat so Quote Desk shows "last checked"
+  if (!sent) send([], key); // heartbeat so Quote Desk shows "last checked"
   Logger.log('Sent ' + sent + ' email(s) to Quote Desk.');
+  return sent;
 }
 
 function pack(m, thread) {
@@ -78,10 +131,10 @@ function pack(m, thread) {
   };
 }
 
-function send(emails) {
+function send(emails, key) {
   var res = UrlFetchApp.fetch(API_URL, {
     method: 'post', contentType: 'text/plain', muteHttpExceptions: true, followRedirects: true,
-    payload: JSON.stringify({ action: 'connector.ingest', connectKey: CONNECT_KEY, emails: emails })
+    payload: JSON.stringify({ action: 'connector.ingest', connectKey: key, emails: emails })
   });
   var out = {};
   try { out = JSON.parse(res.getContentText()); } catch (e) { throw new Error('Quote Desk did not answer: ' + res.getResponseCode()); }
