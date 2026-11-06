@@ -11,8 +11,8 @@
  * It only reads deal-like emails. It never sends or deletes email.
  */
 
-var CONNECT_KEY = 'qd_9281d79bc4424ccfb66e00deba54e315';   // manual mode only – leave as is for one-click
-var API_URL = 'https://script.google.com/macros/s/AKfycbxP_tsg3zjAldnckfjTpGHccfqUMGtpI-scke8g4DZ4C6_g9gweZb7zf4VphhkKsl7e/exec';     // the Quote Desk API /exec URL
+var CONNECT_KEY = 'PASTE_YOUR_CONNECT_KEY_HERE';   // manual mode only – leave as is for one-click
+var API_URL = 'PASTE_QUOTE_DESK_API_URL_HERE';     // the Quote Desk API /exec URL
 
 // Which emails to send to Quote Desk. Only deal-like emails – not your whole mailbox.
 var SEARCH = 'newer_than:3d -in:chats -in:spam -in:trash ' +
@@ -109,10 +109,10 @@ function scanNow() {
       });
     });
     list = list.slice(-40);
-    if (!list.length) { call({ action: 'connector.ingest', connectKey: key, dealId: t.dealId, final: true, emails: [] }); return; }
+    if (!list.length) { call({ action: 'connector.ingest', connectKey: key, dealId: t.dealId, final: true, emails: [], account: me }); return; }
     for (var i = 0; i < list.length; i += BATCH) {
       var part = list.slice(i, i + BATCH);
-      call({ action: 'connector.ingest', connectKey: key, dealId: t.dealId, final: i + BATCH >= list.length, emails: part });
+      call({ action: 'connector.ingest', connectKey: key, dealId: t.dealId, final: i + BATCH >= list.length, emails: part, account: me });
       sent += part.length;
     }
   });
@@ -154,7 +154,7 @@ function pack(m, thread, me) {
 }
 
 function send(emails, key) {
-  call({ action: 'connector.ingest', connectKey: key, emails: emails });
+  call({ action: 'connector.ingest', connectKey: key, emails: emails, account: Session.getActiveUser().getEmail() });
   return emails.length;
 }
 
