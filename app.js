@@ -226,7 +226,7 @@ function builder(x) {
   const ex = x.extract || {}; const busyEx = ex.status === 'queued' || ex.status === 'working';
   if (busyEx) h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Claude is reading price file ' + Math.min((ex.done || []).length + 1, (ex.files || []).length) + ' of ' + (ex.files || []).length + ' (about 1 min each)… <button class="btn sm ghost" data-act="cancelEx">Cancel</button></p>';
   if (!(x.lines || []).length) {
-    const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx)$/i.test(f.name || ''));
+    const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx|txt)$/i.test(f.name || ''));
     if (!busyEx) {
       h += '<p style="margin:0 0 8px">No cost lines yet. Tick the supplier price files for Claude to read:</p>';
       h += pf.length ? '<form data-form="extract"><ul class="files">' + pf.map((f) => '<li><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="f" value="' + esc(f.id) + '"' + (/quot|price|pricing|proposal|offer|sct|config/i.test(f.name) ? ' checked' : '') + ' style="width:18px;height:18px"> ' + esc(f.name) + '</label> <a href="' + esc(f.url) + '" target="_blank" rel="noopener" style="margin-left:6px">open</a></li>').join('') + '</ul>' +
