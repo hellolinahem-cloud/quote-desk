@@ -11,8 +11,8 @@
  * It only looks for emails about the deals you create in Quote Desk. It never sends or deletes email.
  */
 
-var CONNECT_KEY = 'PASTE_YOUR_CONNECT_KEY_HERE';   // manual mode only – leave as is for one-click
-var API_URL = 'PASTE_QUOTE_DESK_API_URL_HERE';     // the Quote Desk API /exec URL
+var CONNECT_KEY = 'qd_9281d79bc4424ccfb66e00deba54e315';   // manual mode only – leave as is for one-click
+var API_URL = 'https://script.google.com/macros/s/AKfycbxP_tsg3zjAldnckfjTpGHccfqUMGtpI-scke8g4DZ4C6_g9gweZb7zf4VphhkKsl7e/exec';     // the Quote Desk API /exec URL
 
 // Which emails to send to Quote Desk. Only deal-like emails – not your whole mailbox.
 var SEARCH = 'newer_than:3d -in:chats -in:spam -in:trash ' +
