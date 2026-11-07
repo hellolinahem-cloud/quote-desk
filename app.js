@@ -224,7 +224,7 @@ function builder(x) {
   const p = x.pricing || (x.pricing = { cm: 7, ship: 0, mk: { Hardware: 30, Software: 10, Support: 30, Service: 30 }, flags: [] });
   const r = calc(x); let h = '';
   const ex = x.extract || {}; const busyEx = ex.status === 'queued' || ex.status === 'working';
-  if (busyEx) h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Claude is reading price file ' + Math.min((ex.done || []).length + 1, (ex.files || []).length) + ' of ' + (ex.files || []).length + ' (about 1 min each)…</p>';
+  if (busyEx) h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Claude is reading price file ' + Math.min((ex.done || []).length + 1, (ex.files || []).length) + ' of ' + (ex.files || []).length + ' (about 1 min each)… <button class="btn sm ghost" data-act="cancelEx">Cancel</button></p>';
   if (!(x.lines || []).length) {
     const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx)$/i.test(f.name || ''));
     if (!busyEx) {
@@ -448,6 +448,7 @@ document.addEventListener('click', async (e) => {
   else if (a === 'newDeal') newDealForm();
   else if (a === 'disconnectGmail') { window.open(connUrl(S.user.connectorAppUrl, connEmail(S.user), 'action=disconnect'), '_blank', 'noopener'); toast('Disconnected – press ↻ to refresh'); }
   else if (a === 'skipAll') { const ids = S.inbox.filter((m) => !m.pending).map((m) => m.id); try { await api('inbox.skipAll', { ids }); S.inbox = S.inbox.filter((m) => m.pending); render(); toast('Skipped ' + ids.length + ' email(s)'); } catch (err) { toast(err.message); } }
+  else if (a === 'cancelEx' && x) { mutate(x, () => { x.extract = null; log(x, 'Price reading cancelled'); }, 'Cancelled – choose files and try again'); }
   else if (a === 'showKey') { S.showKey = !S.showKey; render(); }
   else if (a === 'newKey') { try { S.user = await api('auth.newConnectKey'); render(); toast('New key made – update it in your Connector script'); } catch (err) { toast(err.message); } }
   else if (a === 'install' && S.installEvt) { S.installEvt.prompt(); S.installEvt = null; render(); }
