@@ -223,15 +223,18 @@ function viewDeal() {
 function builder(x) {
   const p = x.pricing || (x.pricing = { cm: 7, ship: 0, mk: { Hardware: 30, Software: 10, Support: 30, Service: 30 }, flags: [] });
   const r = calc(x); let h = '';
-  const ex = x.extract || {}; const busyEx = ex.status === 'queued' || ex.status === 'working';
-  if (busyEx) h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Claude is reading price file ' + Math.min((ex.done || []).length + 1, (ex.files || []).length) + ' of ' + (ex.files || []).length + ' (about 1 min each)… <button class="btn sm ghost" data-act="cancelEx">Cancel</button></p>';
+  const ex = x.extract || {}; const busyEx = ex.status === 'queued' || ex.status === 'working' || ex.status === 'waiting-email';
+  if (ex.status === 'waiting-email') h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Getting the email “' + esc(ex.subject || '') + '” from Gmail (next check, up to 5 min)… <button class="btn sm ghost" data-act="cancelEx">Cancel</button></p>';
+  else if (busyEx) h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Claude is reading price file ' + Math.min((ex.done || []).length + 1, (ex.files || []).length) + ' of ' + (ex.files || []).length + ' (about 1 min each)… <button class="btn sm ghost" data-act="cancelEx">Cancel</button></p>';
+  if (ex.status === 'done' && ex.error) h += '<p class="t-red" style="margin:0 0 10px">' + esc(ex.error) + '</p>';
   if (!(x.lines || []).length) {
-    const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx|txt)$/i.test(f.name || ''));
+    const pf = uniqFiles((x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx|txt)$/i.test(f.name || '')));
     if (!busyEx) {
       h += '<p style="margin:0 0 8px">No cost lines yet. Tick the supplier price files for Claude to read:</p>';
       h += pf.length ? '<form data-form="extract"><ul class="files">' + pf.map((f) => '<li><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="f" value="' + esc(f.id) + '"' + (/quot|price|pricing|proposal|offer|sct|config/i.test(f.name) ? ' checked' : '') + ' style="width:18px;height:18px"> ' + esc(f.name) + '</label> <a href="' + esc(f.url) + '" target="_blank" rel="noopener" style="margin-left:6px">open</a></li>').join('') + '</ul>' +
         '<div class="row" style="margin-top:10px"><button class="btn primary">Read selected with Claude</button><button type="button" class="btn" data-act="addLine">Add line by hand</button></div></form>'
         : '<p class="muted">No price files yet – they arrive from Gmail.</p><button class="btn" data-act="addLine">Add line by hand</button>';
+      h += emailPicker(x);
     }
     return h;
   }
@@ -252,12 +255,12 @@ function builder(x) {
       '<td style="text-align:center">' + (hw ? '<span class="muted" title="No WHT on hardware">–</span>' : '<label class="sw"><input type="checkbox" data-wht="' + j + '" ' + (l.wht ? 'checked' : '') + ' aria-label="WHT on line ' + (j + 1) + '"><span></span></label>') + '</td>' +
       '<td class="r" style="font-weight:600" id="st-' + j + '">' + (l.inc !== false ? money(l._st) : '–') + '</td><td><button class="ibtn" style="width:30px;height:30px;border:none" data-delline="' + j + '" aria-label="Remove line ' + (j + 1) + '">' + XI + '</button></td></tr>'; });
   h += '</tbody></table></div><div class="row" style="margin-top:8px"><button class="btn sm ghost" data-act="addLine">+ Add line by hand</button>' +
-    ((x.files || []).length && !busyEx ? '<button class="btn sm ghost" data-act="moreFiles">+ Read more files with Claude</button>' : '') + '</div>';
+    (!busyEx ? '<button class="btn sm ghost" data-act="moreFiles">+ Read more files or an email with Claude</button>' : '') + '</div>';
   if (S.open[x.id + 'more'] && !busyEx) {
     const done = x.readFiles || [];
-    const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx|txt)$/i.test(f.name || ''));
+    const pf = uniqFiles((x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx|txt)$/i.test(f.name || '')));
     h += '<form data-form="extract" data-append="1" class="card" style="padding:12px 14px;margin-top:8px"><b>Add lines from more files</b><ul class="files">' + pf.map((f) => '<li><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="f" value="' + esc(f.id) + '"' + (done.indexOf(f.id) < 0 && /quot|price|pricing|proposal|offer/i.test(f.name) ? ' checked' : '') + ' style="width:18px;height:18px"> ' + esc(f.name) + (done.indexOf(f.id) >= 0 ? ' <span class="chip green">read</span>' : '') + '</label></li>').join('') + '</ul>' +
-      '<div class="row" style="margin-top:8px"><button class="btn primary sm">Read and add lines</button><button type="button" class="btn sm ghost" data-act="moreFiles">Close</button></div></form>';
+      '<div class="row" style="margin-top:8px"><button class="btn primary sm">Read and add lines</button><button type="button" class="btn sm ghost" data-act="moreFiles">Close</button></div></form>' + emailPicker(x);
   }
   h += '<div class="costs"><label class="field">Commission %<input data-deal="cm" value="' + (p.cm == null ? '' : p.cm) + '"></label><label class="field">Shipment (USD)' + (p.shipNote ? ' · estimate' : '') + '<input class="' + (p.shipNote ? 'est' : '') + '" data-deal="ship" value="' + (p.ship || 0) + '">' + (p.shipNote ? '<span class="t-amber" style="font-weight:400">' + esc(p.shipNote) + ' – confirm with Procurement</span>' : '') + '</label></div>';
   const ci = x.customerInfo || {}, t = x.terms || {};
@@ -274,6 +277,13 @@ function stickyBar(x) { const r = calc(x);
 function patch() { const x = byId(S.sel); if (!x) return; const r = calc(x); const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
   Object.keys(r.cats).forEach((c) => { const v = r.cats[c]; set('p-' + c.replace(/\W/g, ''), 'GP ' + (v.sell ? ((v.sell - v.cost) / v.sell * 100).toFixed(1) : '0') + '%'); });
   (x.lines || []).forEach((l, j) => set('st-' + j, l.inc !== false ? money(l._st) : '–')); set('b-gp', money(r.gp)); set('b-gpp', r.gpp.toFixed(1) + '%'); set('b-tot', money(r.total)); }
+
+function uniqFiles(list) { const seen = {}; return (list || []).filter((f) => { const k = (f.name || '').toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; }); }
+function emailPicker(x) {
+  const subs = []; (x.mail || []).forEach((m) => { if (!m.sent && !m.unrelated && m.subject && subs.indexOf(m.subject) < 0) subs.push(m.subject); });
+  return '<form data-form="readEmail" class="row" style="margin-top:12px;align-items:flex-end"><label class="field" style="flex:1 1 320px">Or read prices written in an email – type or pick the subject<input name="subject" list="mailsubs-' + esc(x.id) + '" placeholder="e.g. ECI || Acleda Bank || Request Quotation for Dell Server" required></label>' +
+    '<datalist id="mailsubs-' + esc(x.id) + '">' + subs.slice(-30).reverse().map((s) => '<option value="' + esc(s) + '">').join('') + '</datalist><button class="btn sm primary" style="min-height:40px">Read prices in this email</button></form>';
+}
 
 /* ---------- views: inbox ---------- */
 const KIND = { supplier_pricing: 'Supplier price', customer_request: 'Customer request', sow: 'SoW', procurement_price: 'Procurement price', deal_registration: 'Deal registration', internal_followup: 'Internal', other: 'Other' };
@@ -417,6 +427,8 @@ document.addEventListener('submit', async (e) => {
   if (f.dataset.form === 'connect') { const em = String(new FormData(f).get('email') || '').trim(); if (!em) return; store.set('qd_conn_email', em); window.open(connUrl(S.user.connectorAppUrl, em, 'key=' + encodeURIComponent(S.user.connectKey || '')), '_blank', 'noopener'); toast('Allow access on the Google page, then press ↻'); render(); return; }
   if (f.dataset.form === 'extract') { const x = byId(S.sel); const ids = [...f.querySelectorAll('input[name=f]:checked')].map((i) => i.value); if (!ids.length) { toast('Tick at least one price file'); return; }
     try { const d = await api('claude.extract', { dealId: x.id, fileIds: ids, append: !!f.dataset.append }); Object.assign(x, d); S.open[x.id + 'more'] = false; render(); toast('Claude is reading ' + ids.length + ' file(s) – about 1 min each'); } catch (err) { toast(err.message); } return; }
+  if (f.dataset.form === 'readEmail') { const x = byId(S.sel); const subject = String(new FormData(f).get('subject') || '').trim(); if (!subject) return;
+    try { const d = await api('deals.readEmail', { dealId: x.id, subject }); Object.assign(x, d); S.open[x.id + 'more'] = false; render(); toast(d.extract && d.extract.status === 'queued' ? 'Claude is reading the prices in that email' : 'Getting the email from Gmail – up to 5 min'); } catch (err) { toast(err.message); } return; }
   if (f.dataset.form === 'newDeal') {
     const v = Object.fromEntries(new FormData(f).entries()); const btn = f.querySelector('.primary'); btn.disabled = true;
     const deal = { customer: v.customer, project: v.project, supplier: v.supplier, sales: v.sales, deadline: v.deadline || null, costing: v.costing ? v.costing.split(',').map((s) => s.trim()).filter(Boolean) : [] };
@@ -495,7 +507,7 @@ $('#grip').addEventListener('pointerdown', (e) => { e.preventDefault(); const c 
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.installEvt = e; if (S.view === 'settings') render(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) loadAll(); });
 setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length) loadAll(); }, 5 * 60 * 1000);
-setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && (S.deals.some((d) => (d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading')) || (d.extract && (d.extract.status === 'queued' || d.extract.status === 'working'))) || S.inbox.some((m) => m.pending))) loadAll(); }, 30 * 1000);
+setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && (S.deals.some((d) => (d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading')) || (d.extract && (d.extract.status === 'queued' || d.extract.status === 'working' || d.extract.status === 'waiting-email'))) || S.inbox.some((m) => m.pending))) loadAll(); }, 30 * 1000);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // datalists for names
