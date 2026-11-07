@@ -26,7 +26,9 @@ const S = {
 /* ---------- API ---------- */
 async function api(action, data) {
   if (!CFG.API_URL) throw new Error('API URL is missing in config.js.');
-  const res = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, data || {})) });
+  let res;
+  try { res = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, data || {})) }); }
+  catch (e) { throw new Error('Could not reach Quote Desk – check your internet and try again.'); }
   let out;
   try { out = await res.json(); } catch (e) { throw new Error('Server did not answer. Check your connection.'); }
   if (!out.ok) {
@@ -221,9 +223,16 @@ function viewDeal() {
 function builder(x) {
   const p = x.pricing || (x.pricing = { cm: 7, ship: 0, mk: { Hardware: 30, Software: 10, Support: 30, Service: 30 }, flags: [] });
   const r = calc(x); let h = '';
+  const ex = x.extract || {}; const busyEx = ex.status === 'queued' || ex.status === 'working';
+  if (busyEx) h += '<p class="t-amber" style="margin:0 0 10px"><span class="spin"></span> Claude is reading price file ' + Math.min((ex.done || []).length + 1, (ex.files || []).length) + ' of ' + (ex.files || []).length + ' (about 1 min each)…</p>';
   if (!(x.lines || []).length) {
-    h += '<p style="margin:0 0 10px">No cost lines yet.</p><div class="row">' + ((x.files || []).length ? '<button class="btn primary" data-act="extract"' + (S.busy.extract ? ' disabled' : '') + '>' + (S.busy.extract ? '<span class="spin"></span> Claude is reading ' + x.files.length + ' file(s)…' : 'Read pricing with Claude') + '</button>' : '<span class="muted">No supplier files yet – they arrive from email.</span>') +
-      '<button class="btn" data-act="addLine">Add line by hand</button></div>';
+    const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx)$/i.test(f.name || ''));
+    if (!busyEx) {
+      h += '<p style="margin:0 0 8px">No cost lines yet. Tick the supplier price files for Claude to read:</p>';
+      h += pf.length ? '<form data-form="extract"><ul class="files">' + pf.map((f) => '<li><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="f" value="' + esc(f.id) + '"' + (/quot|price|pricing|proposal|offer|sct|config/i.test(f.name) ? ' checked' : '') + ' style="width:18px;height:18px"> ' + esc(f.name) + '</label> <a href="' + esc(f.url) + '" target="_blank" rel="noopener" style="margin-left:6px">open</a></li>').join('') + '</ul>' +
+        '<div class="row" style="margin-top:10px"><button class="btn primary">Read selected with Claude</button><button type="button" class="btn" data-act="addLine">Add line by hand</button></div></form>'
+        : '<p class="muted">No price files yet – they arrive from Gmail.</p><button class="btn" data-act="addLine">Add line by hand</button>';
+    }
     return h;
   }
   if (p.ref) h += '<p class="muted" style="margin:0 0 8px;font-size:13px">' + esc(p.ref) + '</p>';
@@ -242,7 +251,7 @@ function builder(x) {
       '<td class="r"><input class="num" style="width:100px" data-line="' + j + '" data-f="cost" value="' + l.cost + '" aria-label="Unit cost line ' + (j + 1) + '"></td>' +
       '<td style="text-align:center">' + (hw ? '<span class="muted" title="No WHT on hardware">–</span>' : '<label class="sw"><input type="checkbox" data-wht="' + j + '" ' + (l.wht ? 'checked' : '') + ' aria-label="WHT on line ' + (j + 1) + '"><span></span></label>') + '</td>' +
       '<td class="r" style="font-weight:600" id="st-' + j + '">' + (l.inc !== false ? money(l._st) : '–') + '</td><td><button class="ibtn" style="width:30px;height:30px;border:none" data-delline="' + j + '" aria-label="Remove line ' + (j + 1) + '">' + XI + '</button></td></tr>'; });
-  h += '</tbody></table></div><div class="row" style="margin-top:8px"><button class="btn sm ghost" data-act="addLine">+ Add line</button>' + ((x.files || []).length ? '<button class="btn sm ghost" data-act="extract"' + (S.busy.extract ? ' disabled' : '') + '>' + (S.busy.extract ? '<span class="spin"></span> Reading…' : 'Read again with Claude') + '</button>' : '') + '</div>';
+  h += '</tbody></table></div><div class="row" style="margin-top:8px"><button class="btn sm ghost" data-act="addLine">+ Add line</button>' +  + '</div>';
   h += '<div class="costs"><label class="field">Commission %<input data-deal="cm" value="' + (p.cm == null ? '' : p.cm) + '"></label><label class="field">Shipment (USD)' + (p.shipNote ? ' · estimate' : '') + '<input class="' + (p.shipNote ? 'est' : '') + '" data-deal="ship" value="' + (p.ship || 0) + '">' + (p.shipNote ? '<span class="t-amber" style="font-weight:400">' + esc(p.shipNote) + ' – confirm with Procurement</span>' : '') + '</label></div>';
   const ci = x.customerInfo || {}, t = x.terms || {};
   h += '<details class="fold" style="margin-top:12px"><summary><span class="car">▸</span>Quotation details' + (!ci.address || !ci.contact ? ' <span class="chip amber">needs info</span>' : '') + '</summary><div class="costs">' +
@@ -399,6 +408,8 @@ document.addEventListener('submit', async (e) => {
   if (f.id === 'composer') { const v = $('#cin').value.trim(); if (!v) return; $('#cin').value = ''; return sendChat(v); }
   if (f.dataset.form === 'addCost') { const x = byId(S.sel); const v = Object.fromEntries(new FormData(f).entries()); if (!v.n.trim()) return; mutate(x, () => { x.costing = x.costing || []; x.costing.push({ n: v.n.trim(), sup: (v.sup || '').trim(), t: v.t, status: 'todo', by: 'user' }); if (x.d.priceRcv && !x.d.drafted) delete x.d.priceRcv; log(x, 'Added item: ' + v.n.trim()); }, 'Item added'); }
   if (f.dataset.form === 'connect') { const em = String(new FormData(f).get('email') || '').trim(); if (!em) return; store.set('qd_conn_email', em); window.open(connUrl(S.user.connectorAppUrl, em, 'key=' + encodeURIComponent(S.user.connectKey || '')), '_blank', 'noopener'); toast('Allow access on the Google page, then press ↻'); render(); return; }
+  if (f.dataset.form === 'extract') { const x = byId(S.sel); const ids = [...f.querySelectorAll('input[name=f]:checked')].map((i) => i.value); if (!ids.length) { toast('Tick at least one price file'); return; }
+    try { const d = await api('claude.extract', { dealId: x.id, fileIds: ids }); Object.assign(x, d); render(); toast('Claude is reading ' + ids.length + ' file(s) – about 1 min each'); } catch (err) { toast(err.message); } return; }
   if (f.dataset.form === 'newDeal') {
     const v = Object.fromEntries(new FormData(f).entries()); const btn = f.querySelector('.primary'); btn.disabled = true;
     const deal = { customer: v.customer, project: v.project, supplier: v.supplier, sales: v.sales, deadline: v.deadline || null, costing: v.costing ? v.costing.split(',').map((s) => s.trim()).filter(Boolean) : [] };
@@ -475,7 +486,7 @@ $('#grip').addEventListener('pointerdown', (e) => { e.preventDefault(); const c 
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.installEvt = e; if (S.view === 'settings') render(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) loadAll(); });
 setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length) loadAll(); }, 5 * 60 * 1000);
-setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && (S.deals.some((d) => d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading')) || S.inbox.some((m) => m.pending))) loadAll(); }, 30 * 1000);
+setInterval(() => { if (!document.hidden && S.user && !Object.keys(saveTimers).length && (S.deals.some((d) => (d.scan && (d.scan.status === 'queued' || d.scan.status === 'reading')) || (d.extract && (d.extract.status === 'queued' || d.extract.status === 'working'))) || S.inbox.some((m) => m.pending))) loadAll(); }, 30 * 1000);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // datalists for names
