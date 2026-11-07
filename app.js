@@ -251,7 +251,14 @@ function builder(x) {
       '<td class="r"><input class="num" style="width:100px" data-line="' + j + '" data-f="cost" value="' + l.cost + '" aria-label="Unit cost line ' + (j + 1) + '"></td>' +
       '<td style="text-align:center">' + (hw ? '<span class="muted" title="No WHT on hardware">–</span>' : '<label class="sw"><input type="checkbox" data-wht="' + j + '" ' + (l.wht ? 'checked' : '') + ' aria-label="WHT on line ' + (j + 1) + '"><span></span></label>') + '</td>' +
       '<td class="r" style="font-weight:600" id="st-' + j + '">' + (l.inc !== false ? money(l._st) : '–') + '</td><td><button class="ibtn" style="width:30px;height:30px;border:none" data-delline="' + j + '" aria-label="Remove line ' + (j + 1) + '">' + XI + '</button></td></tr>'; });
-  h += '</tbody></table></div><div class="row" style="margin-top:8px"><button class="btn sm ghost" data-act="addLine">+ Add line</button>' +  + '</div>';
+  h += '</tbody></table></div><div class="row" style="margin-top:8px"><button class="btn sm ghost" data-act="addLine">+ Add line by hand</button>' +
+    ((x.files || []).length && !busyEx ? '<button class="btn sm ghost" data-act="moreFiles">+ Read more files with Claude</button>' : '') + '</div>';
+  if (S.open[x.id + 'more'] && !busyEx) {
+    const done = x.readFiles || [];
+    const pf = (x.files || []).filter((f) => /\.(pdf|xlsx|xls|csv|docx|txt)$/i.test(f.name || ''));
+    h += '<form data-form="extract" data-append="1" class="card" style="padding:12px 14px;margin-top:8px"><b>Add lines from more files</b><ul class="files">' + pf.map((f) => '<li><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="f" value="' + esc(f.id) + '"' + (done.indexOf(f.id) < 0 && /quot|price|pricing|proposal|offer/i.test(f.name) ? ' checked' : '') + ' style="width:18px;height:18px"> ' + esc(f.name) + (done.indexOf(f.id) >= 0 ? ' <span class="chip green">read</span>' : '') + '</label></li>').join('') + '</ul>' +
+      '<div class="row" style="margin-top:8px"><button class="btn primary sm">Read and add lines</button><button type="button" class="btn sm ghost" data-act="moreFiles">Close</button></div></form>';
+  }
   h += '<div class="costs"><label class="field">Commission %<input data-deal="cm" value="' + (p.cm == null ? '' : p.cm) + '"></label><label class="field">Shipment (USD)' + (p.shipNote ? ' · estimate' : '') + '<input class="' + (p.shipNote ? 'est' : '') + '" data-deal="ship" value="' + (p.ship || 0) + '">' + (p.shipNote ? '<span class="t-amber" style="font-weight:400">' + esc(p.shipNote) + ' – confirm with Procurement</span>' : '') + '</label></div>';
   const ci = x.customerInfo || {}, t = x.terms || {};
   h += '<details class="fold" style="margin-top:12px"><summary><span class="car">▸</span>Quotation details' + (!ci.address || !ci.contact ? ' <span class="chip amber">needs info</span>' : '') + '</summary><div class="costs">' +
@@ -409,7 +416,7 @@ document.addEventListener('submit', async (e) => {
   if (f.dataset.form === 'addCost') { const x = byId(S.sel); const v = Object.fromEntries(new FormData(f).entries()); if (!v.n.trim()) return; mutate(x, () => { x.costing = x.costing || []; x.costing.push({ n: v.n.trim(), sup: (v.sup || '').trim(), t: v.t, status: 'todo', by: 'user' }); if (x.d.priceRcv && !x.d.drafted) delete x.d.priceRcv; log(x, 'Added item: ' + v.n.trim()); }, 'Item added'); }
   if (f.dataset.form === 'connect') { const em = String(new FormData(f).get('email') || '').trim(); if (!em) return; store.set('qd_conn_email', em); window.open(connUrl(S.user.connectorAppUrl, em, 'key=' + encodeURIComponent(S.user.connectKey || '')), '_blank', 'noopener'); toast('Allow access on the Google page, then press ↻'); render(); return; }
   if (f.dataset.form === 'extract') { const x = byId(S.sel); const ids = [...f.querySelectorAll('input[name=f]:checked')].map((i) => i.value); if (!ids.length) { toast('Tick at least one price file'); return; }
-    try { const d = await api('claude.extract', { dealId: x.id, fileIds: ids }); Object.assign(x, d); render(); toast('Claude is reading ' + ids.length + ' file(s) – about 1 min each'); } catch (err) { toast(err.message); } return; }
+    try { const d = await api('claude.extract', { dealId: x.id, fileIds: ids, append: !!f.dataset.append }); Object.assign(x, d); S.open[x.id + 'more'] = false; render(); toast('Claude is reading ' + ids.length + ' file(s) – about 1 min each'); } catch (err) { toast(err.message); } return; }
   if (f.dataset.form === 'newDeal') {
     const v = Object.fromEntries(new FormData(f).entries()); const btn = f.querySelector('.primary'); btn.disabled = true;
     const deal = { customer: v.customer, project: v.project, supplier: v.supplier, sales: v.sales, deadline: v.deadline || null, costing: v.costing ? v.costing.split(',').map((s) => s.trim()).filter(Boolean) : [] };
@@ -448,6 +455,7 @@ document.addEventListener('click', async (e) => {
   else if (a === 'newDeal') newDealForm();
   else if (a === 'disconnectGmail') { window.open(connUrl(S.user.connectorAppUrl, connEmail(S.user), 'action=disconnect'), '_blank', 'noopener'); toast('Disconnected – press ↻ to refresh'); }
   else if (a === 'skipAll') { const ids = S.inbox.filter((m) => !m.pending).map((m) => m.id); try { await api('inbox.skipAll', { ids }); S.inbox = S.inbox.filter((m) => m.pending); render(); toast('Skipped ' + ids.length + ' email(s)'); } catch (err) { toast(err.message); } }
+  else if (a === 'moreFiles' && x) { S.open[x.id + 'more'] = !S.open[x.id + 'more']; render(); }
   else if (a === 'cancelEx' && x) { mutate(x, () => { x.extract = null; log(x, 'Price reading cancelled'); }, 'Cancelled – choose files and try again'); }
   else if (a === 'showKey') { S.showKey = !S.showKey; render(); }
   else if (a === 'newKey') { try { S.user = await api('auth.newConnectKey'); render(); toast('New key made – update it in your Connector script'); } catch (err) { toast(err.message); } }
