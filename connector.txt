@@ -11,8 +11,8 @@
  * It only looks for emails about the deals you create in Quote Desk. It never sends or deletes email.
  */
 
-var CONNECT_KEY = 'qd_9281d79bc4424ccfb66e00deba54e315';   // manual mode only – leave as is for one-click
-var API_URL = 'https://script.google.com/macros/s/AKfycbxP_tsg3zjAldnckfjTpGHccfqUMGtpI-scke8g4DZ4C6_g9gweZb7zf4VphhkKsl7e/exec';     // the Quote Desk API /exec URL
+var CONNECT_KEY = 'PASTE_YOUR_CONNECT_KEY_HERE';   // manual mode only – leave as is for one-click
+var API_URL = 'PASTE_QUOTE_DESK_API_URL_HERE';     // the Quote Desk API /exec URL
 
 // Which emails to send to Quote Desk. Only deal-like emails – not your whole mailbox.
 var SEARCH = 'newer_than:3d -in:chats -in:spam -in:trash ' +
@@ -103,8 +103,8 @@ function scanNow() {
   // 1) full read for a new deal / "Read Gmail again" (last 60 days)
   (job.tasks || []).forEach(function (t) {
     if (timeUp()) return;
-    var list = findMessages(t.q, me, {});
-    sent += sendDeal(t.dealId, list, key, me, false);
+    var list = findMessages(t.q, me, {}, !!t.priceRead);
+    sent += sendDeal(t.dealId, list, key, me, false, !!t.priceRead);
     markSeen(t.dealId, list);
   });
 
@@ -122,12 +122,12 @@ function scanNow() {
   return sent;
 }
 
-function findMessages(q, me, skip) {
+function findMessages(q, me, skip, full) {
   var list = [];
   GmailApp.search(q, 0, 25).forEach(function (thread) {
     thread.getMessages().forEach(function (m) {
-      if (skip[m.getId()] || SKIP_SUBJECT.test(m.getSubject())) return;
-      list.push(pack(m, thread, me));
+      if (skip[m.getId()] || (!full && SKIP_SUBJECT.test(m.getSubject()))) return;
+      list.push(pack(m, thread, me, full));
     });
   });
   return list.slice(-40);
@@ -147,15 +147,15 @@ function markSeen(dealId, list) {
   p.setProperty('seen_' + dealId, JSON.stringify(arr.slice(-200)));
 }
 
-function sendDeal(dealId, list, key, me, watch) {
-  if (!list.length) { if (!watch) call({ action: 'connector.ingest', connectKey: key, dealId: dealId, final: true, emails: [], account: me }); return 0; }
+function sendDeal(dealId, list, key, me, watch, priceRead) {
+  if (!list.length) { if (!watch) call({ action: 'connector.ingest', connectKey: key, dealId: dealId, final: true, emails: [], account: me, priceRead: !!priceRead }); return 0; }
   for (var i = 0; i < list.length; i += BATCH) {
-    call({ action: 'connector.ingest', connectKey: key, dealId: dealId, watch: watch, final: i + BATCH >= list.length, emails: list.slice(i, i + BATCH), account: me });
+    call({ action: 'connector.ingest', connectKey: key, dealId: dealId, watch: watch, priceRead: !!priceRead, final: i + BATCH >= list.length, emails: list.slice(i, i + BATCH), account: me });
   }
   return list.length;
 }
 
-function pack(m, thread, me) {
+function pack(m, thread, me, full) {
   var atts = m.getAttachments({ includeInlineImages: false }).filter(function (a) {
     return ATTACH_OK.test(a.getName()) && a.getSize() <= MAX_ATTACH_BYTES;
   }).slice(0, 6).map(function (a) {
@@ -167,7 +167,7 @@ function pack(m, thread, me) {
     sent: !!me && String(m.getFrom()).toLowerCase().indexOf(me) >= 0,
     date: Utilities.formatDate(m.getDate(), 'Asia/Phnom_Penh', "yyyy-MM-dd'T'HH:mm"),
     link: 'https://mail.google.com/mail/u/0/#all/' + thread.getId(),
-    body: (function (b) { return b.slice(0, PRICED.test(b) ? 30000 : 8000); })(String(m.getPlainBody() || '')),
+    body: (function (b) { return b.slice(0, full || PRICED.test(b) ? 30000 : 8000); })(String(m.getPlainBody() || '')),
     attachments: atts
   };
 }
